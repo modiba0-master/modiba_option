@@ -373,33 +373,79 @@ with col_b:
 
 
 # ──────────────────────────────────────────────
-# ② 상품 선택
+# ② 상품 선택 (필터 테이블)
 # ──────────────────────────────────────────────
 if st.session_state.search_results:
     st.subheader("② 상품 선택")
-    product_options = {}
-    for p in st.session_state.search_results:
-        pid = p.product_id or st.session_state.last_query or DEFAULT_PRODUCT_ID
-        label = f"[{pid}] {p.product_name}" if p.product_name else f"[{pid}]"
-        product_options[label] = p
 
-    labels = list(product_options.keys())
-    default_idx = 0
-    if st.session_state.selected_product:
-        sp_id = st.session_state.selected_product.product_id
-        for i, lbl in enumerate(labels):
-            if sp_id and sp_id in lbl:
-                default_idx = i
-                break
+    all_results = st.session_state.search_results
 
-    selected_label = st.selectbox("상품 목록", labels, index=default_idx,
-                                  label_visibility="collapsed")
-    if selected_label:
-        new_product = product_options[selected_label]
-        if (st.session_state.selected_product is None or
-                new_product.product_id != st.session_state.selected_product.product_id):
-            st.session_state.weights_initialized_for = ""
-        st.session_state.selected_product = new_product
+    # 실시간 필터 입력
+    col_flt, col_cnt = st.columns([4, 1])
+    with col_flt:
+        filter_text = st.text_input(
+            "상품 필터",
+            placeholder="상품ID 또는 상품명 입력 시 실시간 필터...",
+            label_visibility="collapsed",
+            key="product_filter_input",
+        )
+    with col_cnt:
+        st.caption(f"총 {len(all_results)}개 상품")
+
+    # 필터 적용
+    ft = filter_text.strip().lower()
+    filtered_results = [
+        p for p in all_results
+        if not ft
+        or ft in (p.product_id or "").lower()
+        or ft in p.product_name.lower()
+    ]
+
+    if not filtered_results:
+        st.warning("필터 조건에 맞는 상품이 없습니다.")
+    else:
+        # 테이블 표시용 DataFrame (상품ID + 상품명 모두 표시)
+        df_select = pd.DataFrame([
+            {
+                "상품ID": p.product_id or st.session_state.last_query or DEFAULT_PRODUCT_ID,
+                "상품명": p.product_name,
+                "판매가": f"{p.sale_price:,}원",
+                "할인가": f"{p.discounted_price:,}원",
+                "옵션수": f"{len(p.options)}개",
+            }
+            for p in filtered_results
+        ])
+
+        tbl_height = min(250, (len(filtered_results) + 1) * 38 + 10)
+
+        event = st.dataframe(
+            df_select,
+            use_container_width=True,
+            hide_index=True,
+            height=tbl_height,
+            on_select="rerun",
+            selection_mode="single-row",
+        )
+
+        # 행 선택 처리
+        selected_rows = event.selection.rows if event.selection else []
+
+        if selected_rows:
+            new_product = filtered_results[selected_rows[0]]
+            if (st.session_state.selected_product is None or
+                    new_product.product_id != getattr(
+                        st.session_state.selected_product, "product_id", None)):
+                st.session_state.weights_initialized_for = ""
+            st.session_state.selected_product = new_product
+        elif len(filtered_results) == 1 and st.session_state.selected_product is None:
+            # 결과 1개이면 자동 선택
+            st.session_state.selected_product = filtered_results[0]
+
+        # 현재 선택된 상품 표시
+        if st.session_state.selected_product:
+            sp = st.session_state.selected_product
+            sp_pid = sp.product_id or DEFAULT_PRODUCT_ID
+            st.caption(f"✅ 선택된 상품: **[{sp_pid}] {sp.product_name}**")
 
 
 # ──────────────────────────────────────────────
