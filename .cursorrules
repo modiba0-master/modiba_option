@@ -1,0 +1,46 @@
+# 옵션명 기반 가격 계산 엔진 — Cursor 프로젝트 규칙
+
+## 프로젝트 목적
+네이버 커머스 API 상품 데이터를 조회한 뒤 옵션 가격을 재계산하고 엑셀로 출력하는 도구.
+
+## 절대 금지 사항
+- 네이버 상품 가격 수정 API(PATCH/PUT) 호출 금지
+- 옵션 가격 자동 반영(서버→외부 전송) 금지
+- 백그라운드 자동 실행 작업 금지
+- 데이터베이스 저장 금지 (초기 버전)
+- 위 금지 항목과 관련된 코드, 함수, 엔드포인트를 생성하지 말 것
+
+## 기술 스택
+- FastAPI: 백엔드 API (조회 + 계산 결과 반환 전용)
+- Streamlit: 사용자 UI
+- Python 3.11+
+- openpyxl: 엑셀 생성
+- httpx: 비동기 HTTP 클라이언트
+- Pydantic v2: 데이터 모델
+
+## 개발 원칙
+- Harness First: 기능 구현 전에 반드시 테스트 먼저 작성
+- 모든 계산은 명확한 규칙 기반으로 처리한다 (추측/확률 기반 로직 금지)
+- 재현 가능하고 일관된 결과를 우선한다
+- 한글 기반 코드 주석 및 로그 메시지 사용
+- 정중한 어조 유지
+
+## 가격 계산 공식
+P_option = P_base × W_weight × W_part × W_storage
+- 결과는 정수로 반올림(round)
+- 미등록 키워드는 1.0(기본값) 적용
+
+## 폴더 구조
+- app/routes/     : FastAPI 라우터 (product.py, calculate.py)
+- app/services/   : 비즈니스 로직 (parser, price_engine, weight_manager, naver_api, excel_exporter)
+- app/models/     : Pydantic 데이터 모델
+- ui/             : Streamlit 앱
+- tests/          : pytest 테스트
+
+## 코드 생성 지침
+- 새 서비스 함수 추가 시 반드시 tests/ 에 대응 테스트 추가
+- 엔드포인트는 GET(조회) 또는 POST(계산 요청) 만 허용
+- 옵션명 파서(parser.py)는 정규식 기반, 부분매칭 허용
+
+Always prioritize deterministic rule-based parsing and pricing over heuristic or probabilistic approaches.
+All outputs must be explainable and reproducible.

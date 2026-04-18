@@ -1,0 +1,31 @@
+# 환경변수 (절대 커밋하지 않음)
+.env
+*.env
+
+# Python 캐시
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# 가상환경
+venv/
+.venv/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.code-workspace
+
+# OS
+.DS_Store
+Thumbs.db
+
+# 엑셀 임시 파일
+~$*.xlsx
+*.tmp
