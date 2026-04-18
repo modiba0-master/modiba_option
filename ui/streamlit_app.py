@@ -46,20 +46,102 @@ def _get_server_ip() -> str:
             continue
     return "조회 실패"
 
+def _test_naver_api() -> dict:
+    """Railway 서버에서 네이버 커머스 API 연결을 직접 테스트합니다."""
+    import asyncio, base64, time, hashlib
+    import bcrypt
+    import httpx
+
+    client_id = os.getenv("NAVER_COMMERCE_API_CLIENT_ID", "")
+    client_secret = os.getenv("NAVER_COMMERCE_API_CLIENT_SECRET", "")
+
+    if not client_id or not client_secret:
+        return {"step": "자격증명", "ok": False, "msg": "환경변수 미설정"}
+
+    timestamp = int(time.time() * 1000)
+    password = f"{client_id}_{timestamp}"
+    hashed = bcrypt.hashpw(password.encode("utf-8"), client_secret.encode("utf-8"))
+    signature = base64.b64encode(hashed).decode("utf-8")
+
+    token_url = "https://api.commerce.naver.com/external/v1/oauth2/token"
+    try:
+        r = httpx.post(token_url, data={
+            "client_id": client_id,
+            "timestamp": timestamp,
+            "client_secret_sign": signature,
+            "grant_type": "client_credentials",
+            "type": "SELF",
+        }, headers={"Content-Type": "application/x-www-form-urlencoded"}, timeout=10)
+        data = r.json()
+    except Exception as e:
+        return {"step": "토큰발급", "ok": False, "msg": str(e)}
+
+    if r.status_code != 200 or "access_token" not in data:
+        code = data.get("code", "")
+        msg = data.get("message", r.text[:200])
+        return {"step": "토큰발급", "ok": False, "status": r.status_code, "code": code, "msg": msg}
+
+    token = data["access_token"]
+
+    # 상품 상세 조회
+    product_url = f"https://api.commerce.naver.com/external/v1/products/{DEFAULT_PRODUCT_ID}"
+    try:
+        pr = httpx.get(product_url, headers={"Authorization": f"Bearer {token}"}, timeout=10)
+        pdata = pr.json()
+    except Exception as e:
+        return {"step": "토큰OK/상품조회", "ok": False, "msg": str(e), "token_prefix": token[:20]}
+
+    return {
+        "step": "완료",
+        "ok": pr.status_code == 200,
+        "token_status": 200,
+        "product_status": pr.status_code,
+        "product_code": pdata.get("code", ""),
+        "product_msg": pdata.get("message", "")[:100] if pr.status_code != 200 else "OK",
+        "product_name": pdata.get("originProduct", {}).get("name", "") or pdata.get("productName", ""),
+        "token_prefix": token[:20],
+    }
+
+
 with st.sidebar:
     st.markdown("### ⚙️ 서버 정보")
+    col_ip, = st.columns([1])
     if st.button("🌐 Railway 서버 IP 확인", use_container_width=True):
         with st.spinner("서버 IP 조회 중..."):
             ip = _get_server_ip()
         st.session_state["server_ip"] = ip
 
     if "server_ip" in st.session_state:
-        ip = st.session_state["server_ip"]
-        st.code(ip, language=None)
-        st.caption("👆 이 IP를 네이버 커머스 API 화이트리스트에 등록하세요")
-        st.markdown(
-            "[📋 네이버 커머스 개발자센터](https://sell.smartstore.naver.com/#/seller/api)"
-        )
+        st.code(st.session_state["server_ip"], language=None)
+        st.caption("👆 네이버 커머스 API 화이트리스트에 등록하세요")
+
+    st.divider()
+
+    st.markdown("### 🔌 API 연결 테스트")
+    if st.button("🧪 네이버 API 호출 테스트", use_container_width=True, type="primary"):
+        with st.spinner("Railway 서버에서 API 호출 중..."):
+            result = _test_naver_api()
+        st.session_state["api_test_result"] = result
+
+    if "api_test_result" in st.session_state:
+        res = st.session_state["api_test_result"]
+        if res.get("ok"):
+            st.success(f"✅ API 연결 성공!")
+            if res.get("product_name"):
+                st.info(f"상품명: {res['product_name']}")
+            st.caption(f"토큰: {res.get('token_prefix','')}...")
+        else:
+            st.error(f"❌ 실패 — {res.get('step','')}")
+            code = res.get("code", "")
+            msg = res.get("msg", "")
+            if "IP_NOT_ALLOWED" in code:
+                st.warning(f"IP 미등록: {_get_server_ip()}")
+            elif "NotFound" in code or res.get("product_status") == 404:
+                st.info("토큰 발급 성공. 상품ID가 해당 스토어에 없거나 권한 없음.")
+                st.caption(f"토큰: {res.get('token_prefix','')[:20]}...")
+            else:
+                st.caption(f"코드: {code} / {msg}")
+
     st.divider()
     st.markdown("### 📌 API 상태")
     api_status = os.getenv("NAVER_COMMERCE_API_CLIENT_ID", "")
@@ -68,6 +150,7 @@ with st.sidebar:
     else:
         st.error("API 자격증명 미설정")
     st.caption(f"기본 상품ID: `{os.getenv('DEFAULT_PRODUCT_ID', '6774969928')}`")
+    st.markdown("[📋 네이버 커머스 개발자센터](https://sell.smartstore.naver.com/#/seller/api)")
 
 # ──────────────────────────────────────────────
 # CSS 스타일

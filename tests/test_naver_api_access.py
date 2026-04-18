@@ -84,51 +84,72 @@ async def step1_get_token() -> str | None:
 
 
 async def step2_get_product(token: str) -> None:
-    """Step 2: 상품 상세 조회"""
+    """Step 2: 채널상품 조회 (v2)"""
     print("\n" + "=" * 60)
-    print(f"【Step 2】 상품 조회 테스트 (상품ID: {PRODUCT_ID})")
+    print(f"【Step 2】 채널상품 조회 (v2) - 상품ID: {PRODUCT_ID}")
 
-    url = f"{BASE_URL}/v1/products/{PRODUCT_ID}"
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json",
-    }
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
+    # 채널상품 시도
+    url = f"{BASE_URL}/v2/products/channel-products/{PRODUCT_ID}"
     async with httpx.AsyncClient(timeout=15.0) as client:
         resp = await client.get(url, headers=headers)
 
-    print(f"  HTTP Status  : {resp.status_code}")
-
+    print(f"  채널상품 HTTP Status: {resp.status_code}")
     try:
         data = resp.json()
-        print(f"  Response     : {json.dumps(data, ensure_ascii=False, indent=2)[:600]}")
+        print(f"  Response: {json.dumps(data, ensure_ascii=False, indent=2)[:800]}")
     except Exception:
         print(f"  Response(raw): {resp.text[:400]}")
         data = {}
 
     if resp.status_code == 200:
-        print(f"\n  ✅ 상품 조회 성공!")
+        print("  ✅ 채널상품 조회 성공!")
+        return
+
+    # 원상품 시도
+    print(f"\n  → 원상품 조회 시도...")
+    url2 = f"{BASE_URL}/v2/products/origin-products/{PRODUCT_ID}"
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        resp2 = await client.get(url2, headers=headers)
+
+    print(f"  원상품 HTTP Status: {resp2.status_code}")
+    try:
+        data2 = resp2.json()
+        print(f"  Response: {json.dumps(data2, ensure_ascii=False, indent=2)[:800]}")
+    except Exception:
+        print(f"  Response(raw): {resp2.text[:400]}")
+        data2 = {}
+
+    if resp2.status_code == 200:
+        print("  ✅ 원상품 조회 성공!")
     else:
-        print(f"\n  ❌ 상품 조회 실패")
-        _print_error_hint(data)
+        print("  ❌ 원상품 조회도 실패")
+        _print_error_hint(data2)
 
 
 async def step3_search_product(token: str) -> None:
-    """Step 3: 상품 검색 테스트"""
+    """Step 3: 상품 목록 조회 (v2)"""
     print("\n" + "=" * 60)
-    print(f"【Step 3】 상품 검색 테스트 (키워드: {PRODUCT_ID})")
+    print(f"【Step 3】 상품 목록 조회 (v2)")
 
-    url = f"{BASE_URL}/v1/products/search"
-    params = {"productIds": PRODUCT_ID}
+    url = f"{BASE_URL}/v2/products"
+    params = {"size": 5, "page": 1}
     headers = {"Authorization": f"Bearer {token}"}
 
     async with httpx.AsyncClient(timeout=15.0) as client:
         resp = await client.get(url, headers=headers, params=params)
 
-    print(f"  HTTP Status  : {resp.status_code}")
+    print(f"  HTTP Status: {resp.status_code}")
     try:
         data = resp.json()
-        print(f"  Response     : {json.dumps(data, ensure_ascii=False, indent=2)[:800]}")
+        total = data.get("totalElements", data.get("total", "?"))
+        items = data.get("contents", data.get("items", []))
+        print(f"  전체 상품 수: {total}")
+        for it in items[:3]:
+            pid = it.get("channelProductNo", it.get("id", "?"))
+            name = it.get("name", it.get("originProduct", {}).get("name", "?"))
+            print(f"    - [{pid}] {name}")
     except Exception:
         print(f"  Response(raw): {resp.text[:400]}")
 
