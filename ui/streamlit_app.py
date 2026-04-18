@@ -345,15 +345,16 @@ if st.session_state.selected_product:
                 )
             st.rerun()
 
-    # 테이블 헤더: 옵션명 | 재고 | 기존옵션가 | 가중치 | 변경계산가 | 기준가대비 | 단가
-    h0, h1, h2, h3, h4, h5, h6 = st.columns([3.5, 1, 1.2, 1, 1.2, 1.2, 1.2])
+    # 테이블 헤더: 옵션명 | 재고 | 기존옵션가 | 가중치 | 변경계산가 | 기준가대비 | 기존단가 | 변경단가
+    h0, h1, h2, h3, h4, h5, h6, h7 = st.columns([3.2, 0.9, 1.1, 0.9, 1.1, 1.1, 1.1, 1.1])
     h0.markdown("**옵션명**")
     h1.markdown("**재고**")
     h2.markdown("**기존 옵션가**")
     h3.markdown("**가중치**")
     h4.markdown("**변경 계산가**")
     h5.markdown("**기준가 대비**")
-    h6.markdown("**단가**")
+    h6.markdown("**기존 단가**")
+    h7.markdown("**변경 단가**")
     st.markdown("---")
 
     # 옵션 행 렌더링
@@ -362,7 +363,7 @@ if st.session_state.selected_product:
         if key not in st.session_state:
             st.session_state[key] = suggest_weight(opt.option_price, base_price)
 
-        c0, c1, c2, c3, c4, c5, c6 = st.columns([3.5, 1, 1.2, 1, 1.2, 1.2, 1.2])
+        c0, c1, c2, c3, c4, c5, c6, c7 = st.columns([3.2, 0.9, 1.1, 0.9, 1.1, 1.1, 1.1, 1.1])
 
         # 옵션명
         with c0:
@@ -399,7 +400,7 @@ if st.session_state.selected_product:
         with c4:
             st.markdown(f"**{calc:,}원**")
 
-        # 기준가 대비 (변경 계산가 - 기준가 = 옵션 추가/차감 금액)
+        # 기준가 대비 (변경 계산가 - 기준가)
         vs_base = calc - base_price
         vs_color = "#1a7f37" if vs_base >= 0 else "#d73a49"
         vs_str = f"+{vs_base:,}" if vs_base >= 0 else f"{vs_base:,}"
@@ -409,12 +410,31 @@ if st.session_state.selected_product:
                 unsafe_allow_html=True,
             )
 
-        # 단가 (팩 단위당)
-        unit_label, unit_price = parse_unit_price(opt.option_name, calc)
+        # 기존 단가 (현재 실판매가 기준)
+        existing_actual = base_price + opt.option_price
+        unit_label, orig_unit_price = parse_unit_price(opt.option_name, existing_actual)
         with c6:
-            if unit_price is not None:
-                st.markdown(f"{unit_price:,}원<br><small style='color:#888'>{unit_label}</small>",
-                            unsafe_allow_html=True)
+            if orig_unit_price is not None:
+                st.markdown(
+                    f"<span style='color:#888'>{orig_unit_price:,}원</span>"
+                    f"<br><small style='color:#aaa'>{unit_label}</small>",
+                    unsafe_allow_html=True,
+                )
+            else:
+                st.write("—")
+
+        # 변경 단가 (변경 계산가 기준)
+        _, new_unit_price = parse_unit_price(opt.option_name, calc)
+        with c7:
+            if new_unit_price is not None:
+                diff_unit = new_unit_price - (orig_unit_price or new_unit_price)
+                diff_color = "#1a7f37" if diff_unit >= 0 else "#d73a49"
+                diff_str = f"+{diff_unit:,}" if diff_unit >= 0 else f"{diff_unit:,}"
+                st.markdown(
+                    f"<b>{new_unit_price:,}원</b>"
+                    f"<br><small style='color:{diff_color}'>{diff_str}</small>",
+                    unsafe_allow_html=True,
+                )
             else:
                 st.write("—")
 
@@ -435,13 +455,16 @@ if st.session_state.selected_product:
         vs_base = calc_price - base_price
         unit_label, unit_price = parse_unit_price(opt.option_name, calc_price)
 
+        _, orig_unit_price = parse_unit_price(opt.option_name, existing_actual)
+
         rows.append({
             "옵션명": opt.option_name,
             "현재 실판매가": existing_actual,
             "가중치": w,
             "변경 계산가": calc_price,
             "기준가 대비": vs_base,
-            "단가": f"{unit_price:,}원 ({unit_label})" if unit_price else "—",
+            "기존 단가": f"{orig_unit_price:,}원 ({unit_label})" if orig_unit_price else "—",
+            "변경 단가": f"{unit_price:,}원 ({unit_label})" if unit_price else "—",
             "재고(개)": opt.stock,
         })
 
