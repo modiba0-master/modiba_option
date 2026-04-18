@@ -6,6 +6,7 @@ Streamlit UI - 모디바 옵션 가격 계산기
 import asyncio
 import sys
 import os
+import re
 
 import streamlit as st
 import pandas as pd
@@ -32,12 +33,11 @@ DEFAULT_PRODUCT_ID = os.getenv("DEFAULT_PRODUCT_ID", "6774969928")
 # ──────────────────────────────────────────────
 st.markdown("""
 <style>
-[data-testid="stMetricValue"] { font-size: 1.5rem; font-weight: 700; }
+[data-testid="stMetricValue"] { font-size: 1.4rem; font-weight: 700; }
 [data-testid="stMetricLabel"] { font-size: 0.8rem; color: #666; }
 .block-container { padding-top: 1.2rem; padding-bottom: 2rem; }
 div[data-testid="stDataFrame"] { border: 1px solid #e0e0e0; border-radius: 8px; }
 .stAlert { border-radius: 8px; }
-.option-row { padding: 2px 0; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -69,6 +69,28 @@ def suggest_weight(option_price: int, base_price: int) -> float:
 
 def get_weight_key(option_id: str) -> str:
     return f"opt_w_{option_id}"
+
+
+def parse_unit_price(option_name: str, calc_price: int) -> tuple:
+    """
+    옵션명에서 팩 단위와 수량을 추출하여 단가를 계산합니다.
+    반환: (라벨, 단가) 예: ("1kg당", 10600) 또는 ("—", None)
+    패턴 예: (1kgX3팩), (500gX6팩), (200gX5)
+    """
+    m = re.search(r'(\d+(?:\.\d+)?)(kg|g)[Xx×](\d+)', option_name, re.IGNORECASE)
+    if m:
+        size = float(m.group(1))
+        unit = m.group(2).lower()
+        count = int(m.group(3))
+        if count <= 0:
+            return "—", None
+        unit_price = round(calc_price / count)
+        if unit == "kg":
+            label = f"{int(size)}kg당"
+        else:
+            label = f"{int(size)}g당"
+        return label, unit_price
+    return "—", None
 
 
 # ──────────────────────────────────────────────
@@ -155,10 +177,9 @@ st.divider()
 for key, default in [
     ("search_results", []),
     ("selected_product", None),
-    ("calc_results", None),
     ("auto_loaded", False),
     ("last_query", ""),
-    ("weights_initialized_for", ""),  # product_id 기준 초기화 여부 추적
+    ("weights_initialized_for", ""),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -233,27 +254,41 @@ if st.session_state.search_results:
 
 
 # ──────────────────────────────────────────────
-# 상품 상세 + 기준가 + 옵션별 가중치
+# ③ 상품 상세 + ④ 기준가 설정
 # ──────────────────────────────────────────────
 if st.session_state.selected_product:
     product = st.session_state.selected_product
     display_id = product.product_id or DEFAULT_PRODUCT_ID
     st.divider()
 
-    # ③ 상품 상세 + ④ 기준가
     col_info, col_base = st.columns([2, 1])
 
     with col_info:
         st.subheader("③ 상품 상세")
         st.markdown(f"### {product.product_name}")
         st.caption(f"상품번호: {display_id} | 옵션 {len(product.options)}개")
+
+        # 네이버 원본 가격 (변경 불가, 참조용)
+        st.caption("**[네이버 원본]**")
         m1, m2, m3 = st.columns(3)
         m1.metric("판매가", f"{product.sale_price:,}원")
         m2.metric("기본할인", f"▼ {product.discount_amount:,}원")
         m3.metric("할인가", f"{product.discounted_price:,}원")
 
     with col_base:
-        st.subheader("④ 대표 기준가")
+        st.subheader("④ 대표 기준가 설정")
+
+        # 할인율 설정
+        discount_rate = st.number_input(
+            "할인율 (%)",
+            min_value=1,
+            max_value=99,
+            value=48,
+            step=1,
+            help="기준가 = 변경 판매가 × (1 - 할인율/100). 기본 48%",
+        )
+
+        # 기준가 직접 입력 (기본값 = 네이버 할인가)
         default_base = (product.discounted_price if product.discounted_price > 0
                         else product.sale_price)
         base_price = st.number_input(
@@ -261,46 +296,64 @@ if st.session_state.selected_product:
             min_value=1,
             value=default_base,
             step=100,
-            label_visibility="collapsed",
-            help="이 기준가 × 각 옵션 가중치 = 변경 계산가",
+            help=f"변경 계산가 = 기준가 × 옵션가중치",
         )
-        st.markdown(f"## **{base_price:,}원**")
-        st.caption("변경가 = **기준가 × 옵션가중치**")
+
+        # 기준가 → 변경된 판매가 역산 (할인율 기반)
+        rate = discount_rate / 100
+        new_sale_price = round(base_price / (1 - rate)) if rate < 1 else base_price
+
+        st.markdown("---")
+        st.caption("**[기준가 기반 변경 가격]**")
+        nb1, nb2 = st.columns(2)
+        nb1.metric(
+            "변경 기준가",
+            f"{base_price:,}원",
+            delta=f"{base_price - product.discounted_price:+,}원 vs 할인가",
+            delta_color="off",
+        )
+        nb2.metric(
+            f"변경 판매가 ({discount_rate}% 할인 기준)",
+            f"{new_sale_price:,}원",
+            delta=f"{new_sale_price - product.sale_price:+,}원 vs 네이버",
+            delta_color="off",
+        )
+        st.caption(f"공식: {base_price:,} ÷ (1 - {discount_rate}%) = {new_sale_price:,}원")
 
     st.divider()
 
     # ──────────────────────────────────────────────
-    # ⑤ 옵션별 가중치 설정 (인라인 실시간 계산)
+    # ⑤ 옵션별 가중치 설정 (실시간 자동 계산)
     # ──────────────────────────────────────────────
     st.subheader(f"⑤ 옵션별 가중치 설정 ({len(product.options)}개)")
 
-    # 가중치 초기화: 새 상품이면 기존 옵션가에서 역산하여 자동 설정
+    # 새 상품이면 가중치 초기값 자동 설정 (기존 옵션가에서 역산)
     if st.session_state.weights_initialized_for != display_id:
         for opt in product.options:
             key = get_weight_key(opt.option_id)
-            if key not in st.session_state:
-                suggested = suggest_weight(opt.option_price, base_price)
-                st.session_state[key] = suggested
+            st.session_state[key] = suggest_weight(opt.option_price, base_price)
         st.session_state.weights_initialized_for = display_id
 
-    # 초기화 버튼
     col_hdr, col_reset = st.columns([4, 1])
     with col_hdr:
-        st.caption("💡 가중치 초기값은 현재 옵션가에서 자동 역산됩니다. 직접 수정 가능합니다.")
+        st.caption("💡 가중치 초기값은 현재 옵션가에서 자동 역산됩니다. 기준가 변경 시 🔄 초기화로 재산출하세요.")
     with col_reset:
         if st.button("🔄 가중치 초기화", use_container_width=True):
             for opt in product.options:
-                key = get_weight_key(opt.option_id)
-                st.session_state[key] = suggest_weight(opt.option_price, base_price)
+                st.session_state[get_weight_key(opt.option_id)] = suggest_weight(
+                    opt.option_price, base_price
+                )
             st.rerun()
 
-    # 테이블 헤더
-    h0, h1, h2, h3, h4 = st.columns([4, 1, 1, 1, 1])
+    # 테이블 헤더: 옵션명 | 재고 | 기존옵션가 | 가중치 | 변경계산가 | 기준가대비 | 단가
+    h0, h1, h2, h3, h4, h5, h6 = st.columns([3.5, 1, 1.2, 1, 1.2, 1.2, 1.2])
     h0.markdown("**옵션명**")
     h1.markdown("**재고**")
     h2.markdown("**기존 옵션가**")
     h3.markdown("**가중치**")
     h4.markdown("**변경 계산가**")
+    h5.markdown("**기준가 대비**")
+    h6.markdown("**단가**")
     st.markdown("---")
 
     # 옵션 행 렌더링
@@ -309,12 +362,17 @@ if st.session_state.selected_product:
         if key not in st.session_state:
             st.session_state[key] = suggest_weight(opt.option_price, base_price)
 
-        c0, c1, c2, c3, c4 = st.columns([4, 1, 1, 1, 1])
+        c0, c1, c2, c3, c4, c5, c6 = st.columns([3.5, 1, 1.2, 1, 1.2, 1.2, 1.2])
 
+        # 옵션명
         with c0:
             st.write(opt.option_name)
+
+        # 재고
         with c1:
             st.write(f"{opt.stock:,}개")
+
+        # 기존 옵션가 (상대값, 네이버)
         with c2:
             if opt.option_price == 0:
                 st.write("—")
@@ -322,6 +380,8 @@ if st.session_state.selected_product:
                 st.write(f"+{opt.option_price:,}원")
             else:
                 st.write(f"{opt.option_price:,}원")
+
+        # 가중치 입력
         with c3:
             w = st.number_input(
                 "가중치",
@@ -333,22 +393,35 @@ if st.session_state.selected_product:
                 key=key,
                 label_visibility="collapsed",
             )
+
+        # 변경 계산가
+        calc = round(base_price * w)
         with c4:
-            calc = round(base_price * w)
-            existing_actual = base_price + opt.option_price
-            diff = calc - existing_actual
-            diff_color = "#1a7f37" if diff >= 0 else "#d73a49"
-            diff_str = f"+{diff:,}" if diff >= 0 else f"{diff:,}"
+            st.markdown(f"**{calc:,}원**")
+
+        # 기준가 대비 (변경 계산가 - 기준가 = 옵션 추가/차감 금액)
+        vs_base = calc - base_price
+        vs_color = "#1a7f37" if vs_base >= 0 else "#d73a49"
+        vs_str = f"+{vs_base:,}" if vs_base >= 0 else f"{vs_base:,}"
+        with c5:
             st.markdown(
-                f"**{calc:,}원**<br>"
-                f"<span style='color:{diff_color};font-size:0.8rem'>{diff_str}</span>",
+                f"<span style='color:{vs_color};font-weight:bold'>{vs_str}원</span>",
                 unsafe_allow_html=True,
             )
+
+        # 단가 (팩 단위당)
+        unit_label, unit_price = parse_unit_price(opt.option_name, calc)
+        with c6:
+            if unit_price is not None:
+                st.markdown(f"{unit_price:,}원<br><small style='color:#888'>{unit_label}</small>",
+                            unsafe_allow_html=True)
+            else:
+                st.write("—")
 
     st.divider()
 
     # ──────────────────────────────────────────────
-    # ⑥ 전체 계산 결과 요약 테이블
+    # ⑥ 계산 결과 요약 테이블
     # ──────────────────────────────────────────────
     st.subheader("⑥ 계산 결과 요약")
 
@@ -359,14 +432,16 @@ if st.session_state.selected_product:
         w = float(st.session_state.get(key, 1.0))
         calc_price = round(base_price * w)
         existing_actual = base_price + opt.option_price
-        diff = calc_price - existing_actual
+        vs_base = calc_price - base_price
+        unit_label, unit_price = parse_unit_price(opt.option_name, calc_price)
 
         rows.append({
             "옵션명": opt.option_name,
             "현재 실판매가": existing_actual,
             "가중치": w,
             "변경 계산가": calc_price,
-            "차이(원)": diff,
+            "기준가 대비": vs_base,
+            "단가": f"{unit_price:,}원 ({unit_label})" if unit_price else "—",
             "재고(개)": opt.stock,
         })
 
@@ -384,14 +459,15 @@ if st.session_state.selected_product:
     avg_after = df["변경 계산가"].mean()
 
     # 통계 배너
-    s1, s2, s3, s4 = st.columns(4)
+    s1, s2, s3, s4, s5 = st.columns(5)
     s1.metric("기준가", f"{base_price:,}원")
-    s2.metric("평균 현재가", f"{avg_before:,.0f}원")
-    s3.metric("평균 변경가", f"{avg_after:,.0f}원")
-    s4.metric("평균 변동", f"{avg_after - avg_before:+,.0f}원")
+    s2.metric("변경 판매가", f"{new_sale_price:,}원")
+    s3.metric("평균 현재가", f"{avg_before:,.0f}원")
+    s4.metric("평균 변경가", f"{avg_after:,.0f}원")
+    s5.metric("평균 변동", f"{avg_after - avg_before:+,.0f}원")
 
     # 결과 테이블
-    def color_diff(v):
+    def color_vs(v):
         if isinstance(v, (int, float)):
             if v > 0: return "color: #1a7f37; font-weight:bold"
             if v < 0: return "color: #d73a49; font-weight:bold"
@@ -403,12 +479,12 @@ if st.session_state.selected_product:
             "현재 실판매가": "{:,}원",
             "가중치": "{:.2f}",
             "변경 계산가": "{:,}원",
-            "차이(원)": lambda v: f"+{v:,}" if v >= 0 else f"{v:,}",
+            "기준가 대비": lambda v: f"+{v:,}원" if v >= 0 else f"{v:,}원",
             "재고(개)": "{:,}",
         })
-        .map(color_diff, subset=["차이(원)"])
+        .map(color_vs, subset=["기준가 대비"])
     )
-    st.dataframe(styled, use_container_width=True, hide_index=True, height=320)
+    st.dataframe(styled, use_container_width=True, hide_index=True, height=340)
 
     # ──────────────────────────────────────────────
     # ⑦ 엑셀 다운로드
@@ -430,7 +506,9 @@ if st.session_state.selected_product:
     with c_info:
         st.caption(
             f"파일명: `option_price_{display_id}.xlsx` "
-            f"| {len(calculated_options)}개 옵션 | 기준가 {base_price:,}원"
+            f"| {len(calculated_options)}개 옵션 "
+            f"| 기준가 {base_price:,}원 "
+            f"| 변경판매가 {new_sale_price:,}원 ({discount_rate}% 할인)"
         )
     with c_btn:
         excel_bytes = build_excel_bytes(result)
