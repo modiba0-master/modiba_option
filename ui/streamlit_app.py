@@ -7,15 +7,18 @@ import asyncio
 import sys
 import os
 import re
+import io
 
 import streamlit as st
 import pandas as pd
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.services import naver_api
-from app.services.excel_exporter import build_excel_bytes
-from app.models.product_model import CalculationResult, CalculatedOption
+from app.models.product_model import CalculatedOption
 
 # ──────────────────────────────────────────────
 # 페이지 설정
@@ -69,6 +72,136 @@ def suggest_weight(naver_actual_price: int, base_price: int) -> float:
 
 def get_weight_key(option_id: str) -> str:
     return f"opt_w_{option_id}"
+
+
+def build_option_excel(
+    product_name: str,
+    product_id: str,
+    sale_price: int,
+    discount_amount: int,
+    naver_discounted: int,
+    base_price: int,
+    new_sale_price: int,
+    discount_rate: int,
+    delivery_fee: int,
+    option_rows: list,   # list of dict (⑤ 테이블 행 데이터)
+) -> bytes:
+    """
+    ⑤ 옵션별 가중치 설정 테이블 기준으로 엑셀을 생성합니다.
+    option_rows: [{"옵션명", "재고", "기존옵션가", "기존실판매가", "가중치",
+                   "변경계산가", "기준가대비", "기존단가", "변경단가", "순단가"}, ...]
+    """
+    # ── 스타일 상수
+    NAVY   = PatternFill("solid", fgColor="1F4E79")
+    GRAY   = PatternFill("solid", fgColor="D9E1F2")
+    BLUE   = PatternFill("solid", fgColor="DEEAF1")
+    WHITE  = Font(color="FFFFFF", bold=True, name="맑은 고딕", size=10)
+    BOLD   = Font(bold=True, name="맑은 고딕", size=10)
+    NORMAL = Font(name="맑은 고딕", size=10)
+    CENTER = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    RIGHT  = Alignment(horizontal="right", vertical="center")
+    LEFT   = Alignment(horizontal="left", vertical="center", wrap_text=True)
+    THIN   = Border(
+        left=Side(style="thin"), right=Side(style="thin"),
+        top=Side(style="thin"), bottom=Side(style="thin"),
+    )
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "옵션가격계산"
+    ws.sheet_view.showGridLines = False
+
+    row = 1
+
+    def cell(r, c, val, font=NORMAL, fill=None, align=CENTER, border=THIN):
+        _c = ws.cell(row=r, column=c, value=val)
+        _c.font = font
+        if fill: _c.fill = fill
+        _c.alignment = align
+        _c.border = border
+        return _c
+
+    # ── 1. 상품 헤더 (2행)
+    ws.merge_cells(f"A{row}:D{row}")
+    cell(row, 1, "상품 정보", font=WHITE, fill=NAVY, align=CENTER)
+    ws.merge_cells(f"E{row}:J{row}")
+    cell(row, 5, "기준가 설정", font=WHITE, fill=NAVY, align=CENTER)
+    row += 1
+
+    headers_info = ["상품ID", "상품명", "판매가", "기본할인", "네이버 할인가(기준)", "변경 기준가",
+                    f"변경 판매가({discount_rate}% 할인)", "택배비", "", ""]
+    values_info  = [product_id, product_name, f"{sale_price:,}원", f"{discount_amount:,}원",
+                    f"{naver_discounted:,}원", f"{base_price:,}원",
+                    f"{new_sale_price:,}원", f"{delivery_fee:,}원", "", ""]
+    for col_i, (h, v) in enumerate(zip(headers_info[:8], values_info[:8]), start=1):
+        cell(row, col_i, h, font=BOLD, fill=GRAY, align=CENTER)
+        cell(row + 1, col_i, v, font=NORMAL, align=CENTER)
+    row += 2
+    ws.row_dimensions[row - 1].height = 18
+
+    # 빈 구분행
+    row += 1
+
+    # ── 2. 옵션 테이블 헤더
+    col_headers = [
+        ("옵션명",        LEFT,  30),
+        ("재고",          CENTER, 8),
+        ("기존 옵션가",   CENTER, 12),
+        ("기존 실판매가", CENTER, 13),
+        ("가중치",        CENTER, 8),
+        ("변경 계산가",   CENTER, 13),
+        ("기준가 대비",   CENTER, 12),
+        ("기존 단가",     CENTER, 13),
+        ("변경 단가",     CENTER, 13),
+        ("순단가\n(택배제외)", CENTER, 13),
+    ]
+    for col_i, (header, align, width) in enumerate(col_headers, start=1):
+        cell(row, col_i, header, font=WHITE, fill=NAVY, align=CENTER)
+        ws.column_dimensions[get_column_letter(col_i)].width = width
+    ws.row_dimensions[row].height = 30
+    row += 1
+
+    # ── 3. 옵션 데이터 행
+    GREEN = Font(color="1A7F37", bold=True, name="맑은 고딕", size=10)
+    RED   = Font(color="D73A49", bold=True, name="맑은 고딕", size=10)
+
+    for i, opt_row in enumerate(option_rows):
+        fill_bg = PatternFill("solid", fgColor="EEF3FB") if i % 2 == 0 else None
+
+        def data_cell(col, val, font=None, align=CENTER):
+            _f = font or NORMAL
+            _c = ws.cell(row=row, column=col, value=val)
+            _c.font = _f
+            if fill_bg: _c.fill = fill_bg
+            _c.alignment = align
+            _c.border = THIN
+            return _c
+
+        data_cell(1, opt_row["옵션명"], align=LEFT)
+        data_cell(2, opt_row["재고"])
+        data_cell(3, opt_row["기존옵션가"])
+        data_cell(4, opt_row["기존실판매가"])
+        data_cell(5, opt_row["가중치"])
+        data_cell(6, opt_row["변경계산가"])
+
+        # 기준가 대비: 양수=초록, 음수=빨강
+        vs_val = opt_row["기준가대비"]
+        vs_font = GREEN if vs_val >= 0 else RED
+        vs_str = f"+{vs_val:,}원" if vs_val >= 0 else f"{vs_val:,}원"
+        data_cell(7, vs_str, font=vs_font)
+
+        data_cell(8, opt_row["기존단가"])
+        data_cell(9, opt_row["변경단가"])
+        data_cell(10, opt_row["순단가"])
+
+        ws.row_dimensions[row].height = 16
+        row += 1
+
+    # ── 저장
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf.read()
 
 
 def parse_unit_price(option_name: str, calc_price: int) -> tuple:
@@ -575,31 +708,65 @@ if st.session_state.selected_product:
     st.dataframe(styled, use_container_width=True, hide_index=True, height=340)
 
     # ──────────────────────────────────────────────
-    # ⑦ 엑셀 다운로드
+    # ⑦ 엑셀 다운로드 (⑤ 옵션별 가중치 설정 테이블 기준)
     # ──────────────────────────────────────────────
     st.divider()
     st.subheader("⑦ 엑셀 다운로드")
 
-    result = CalculationResult(
-        product_id=display_id,
-        product_name=product.product_name,
-        sale_price=product.sale_price,
-        discount_amount=product.discount_amount,
-        discounted_price=product.discounted_price,
-        base_price_used=base_price,
-        options=calculated_options,
-    )
+    # ⑤ 테이블과 동일한 행 데이터 구성
+    excel_option_rows = []
+    for opt in product.options:
+        key = get_weight_key(opt.option_id)
+        w = float(st.session_state.get(key, 1.0))
+        existing_actual_xl = naver_discounted + opt.option_price
+        calc_price_xl = round(base_price * w)
+        vs_base_xl = calc_price_xl - base_price
+        unit_label_xl, orig_up = parse_unit_price(opt.option_name, existing_actual_xl)
+        _, new_up = parse_unit_price(opt.option_name, calc_price_xl)
+        net_calc_xl = max(0, calc_price_xl - delivery_fee)
+        _, net_up = parse_unit_price(opt.option_name, net_calc_xl)
+
+        def fmt_opt_price(p):
+            if p == 0: return "—"
+            return f"+{p:,}원" if p > 0 else f"{p:,}원"
+
+        def fmt_unit(up, label):
+            return f"{up:,}원/{label}" if up else "—"
+
+        excel_option_rows.append({
+            "옵션명":     opt.option_name,
+            "재고":       f"{opt.stock:,}개",
+            "기존옵션가": fmt_opt_price(opt.option_price),
+            "기존실판매가": f"{existing_actual_xl:,}원",
+            "가중치":     round(w, 2),
+            "변경계산가": f"{calc_price_xl:,}원",
+            "기준가대비": vs_base_xl,
+            "기존단가":   fmt_unit(orig_up, unit_label_xl),
+            "변경단가":   fmt_unit(new_up, unit_label_xl),
+            "순단가":     fmt_unit(net_up, unit_label_xl),
+        })
 
     c_info, c_btn = st.columns([3, 1])
     with c_info:
         st.caption(
             f"파일명: `option_price_{display_id}.xlsx` "
-            f"| {len(calculated_options)}개 옵션 "
+            f"| {len(excel_option_rows)}개 옵션 "
             f"| 기준가 {base_price:,}원 "
             f"| 변경판매가 {new_sale_price:,}원 ({discount_rate}% 할인)"
         )
     with c_btn:
-        excel_bytes = build_excel_bytes(result)
+        excel_bytes = build_option_excel(
+            product_name=product.product_name,
+            product_id=display_id,
+            sale_price=product.sale_price,
+            discount_amount=product.discount_amount,
+            naver_discounted=naver_discounted,
+            base_price=base_price,
+            new_sale_price=new_sale_price,
+            discount_rate=discount_rate,
+            delivery_fee=delivery_fee,
+            option_rows=excel_option_rows,
+        )
         st.download_button(
             label="📥 엑셀 다운로드",
             data=excel_bytes,
