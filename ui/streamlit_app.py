@@ -406,7 +406,7 @@ if st.session_state.selected_product:
             "차이(원)": lambda v: f"+{v:,}" if v >= 0 else f"{v:,}",
             "재고(개)": "{:,}",
         })
-        .applymap(color_diff, subset=["차이(원)"])
+        .map(color_diff, subset=["차이(원)"])
     )
     st.dataframe(styled, use_container_width=True, hide_index=True, height=320)
 
