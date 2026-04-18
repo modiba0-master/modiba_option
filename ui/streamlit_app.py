@@ -338,26 +338,21 @@ if st.session_state.selected_product:
     # 네이버 초기 할인가 (고정 기준 — 사용자 기준가 변경과 무관)
     naver_discounted = product.discounted_price if product.discounted_price > 0 else product.sale_price
 
-    # ── 가중치 초기화 조건 1: 새 상품 로드 시
+    # 새 상품 로드 시에만 가중치 초기화 (기준가 변경 시 자동재산출 없음 — 수동 조정만)
     if st.session_state.weights_initialized_for != display_id:
         for opt in product.options:
             key = get_weight_key(opt.option_id)
-            naver_actual = naver_discounted + opt.option_price   # 고정된 네이버 실판매가
-            st.session_state[key] = suggest_weight(naver_actual, base_price)
+            naver_actual = naver_discounted + opt.option_price
+            # 초기 가중치 = 네이버 실판매가 / 네이버 할인가 (고정 비율)
+            st.session_state[key] = suggest_weight(naver_actual, naver_discounted)
         st.session_state.weights_initialized_for = display_id
-        st.session_state.prev_base_price = base_price
-
-    # ── 가중치 초기화 조건 2: 기준가 변경 시 → 네이버 실판매가 유지되도록 재산출
-    elif base_price != st.session_state.prev_base_price and base_price > 0:
-        for opt in product.options:
-            key = get_weight_key(opt.option_id)
-            naver_actual = naver_discounted + opt.option_price   # 고정된 네이버 실판매가
-            st.session_state[key] = suggest_weight(naver_actual, base_price)
-        st.session_state.prev_base_price = base_price
 
     col_hdr, col_delivery, col_reset = st.columns([3, 1.5, 1])
     with col_hdr:
-        st.caption("💡 가중치 초기값은 현재 옵션가에서 자동 역산됩니다. 기준가 변경 시 🔄 초기화로 재산출하세요.")
+        st.caption(
+            "💡 가중치 = 기존실판매가 / 네이버할인가. 기준가 변경 시 가중치는 고정, "
+            "변경단가만 재계산됩니다. 🔄 로 초기 비율 복원 가능."
+        )
     with col_delivery:
         delivery_fee = st.number_input(
             "📦 택배비 (원)",
@@ -373,17 +368,24 @@ if st.session_state.selected_product:
             for opt in product.options:
                 naver_actual = naver_discounted + opt.option_price
                 st.session_state[get_weight_key(opt.option_id)] = suggest_weight(
-                    naver_actual, base_price
+                    naver_actual, naver_discounted   # 네이버 할인가 기준 비율
                 )
             st.rerun()
 
-    # 테이블 헤더: 옵션명 | 재고 | 기존옵션가 | 가중치 | 변경계산가 | 기준가대비 | 기존단가 | 변경단가 | 순단가(택배제외)
-    h0, h1, h2, h3, h4, h5, h6, h7, h8 = st.columns([3.0, 0.8, 1.0, 0.8, 1.0, 1.0, 1.0, 1.0, 1.1])
+    # 테이블 헤더 (10컬럼)
+    # 옵션명 | 재고 | 기존옵션가 | 기존실판매가(new) | 가중치 | 변경계산가 | 기준가대비 | 기존단가 | 변경단가 | 순단가
+    h0, h1, h2, h2b, h3, h4, h5, h6, h7, h8 = st.columns(
+        [2.5, 0.7, 0.9, 1.0, 0.8, 1.0, 1.0, 1.0, 1.0, 1.0]
+    )
     h0.markdown("**옵션명**")
     h1.markdown("**재고**")
-    h2.markdown("**기존 옵션가**")
+    h2.markdown("**기존 옵션가**<br><small style='color:#888;font-weight:normal'>상대값</small>",
+                unsafe_allow_html=True)
+    h2b.markdown(f"**기존 실판매가**<br><small style='color:#888;font-weight:normal'>할인가({naver_discounted:,})+옵션가</small>",
+                 unsafe_allow_html=True)
     h3.markdown("**가중치**")
-    h4.markdown("**변경 계산가**")
+    h4.markdown("**변경 계산가**<br><small style='color:#888;font-weight:normal'>가중치×기준가</small>",
+                unsafe_allow_html=True)
     h5.markdown("**기준가 대비**")
     h6.markdown("**기존 단가**")
     h7.markdown("**변경 단가**")
@@ -395,9 +397,16 @@ if st.session_state.selected_product:
     for opt in product.options:
         key = get_weight_key(opt.option_id)
         if key not in st.session_state:
-            st.session_state[key] = suggest_weight(opt.option_price, base_price)
+            naver_actual_init = naver_discounted + opt.option_price
+            st.session_state[key] = suggest_weight(naver_actual_init, naver_discounted)
 
-        c0, c1, c2, c3, c4, c5, c6, c7, c8 = st.columns([3.0, 0.8, 1.0, 0.8, 1.0, 1.0, 1.0, 1.0, 1.1])
+        c0, c1, c2, c2b, c3, c4, c5, c6, c7, c8 = st.columns(
+            [2.5, 0.7, 0.9, 1.0, 0.8, 1.0, 1.0, 1.0, 1.0, 1.0]
+        )
+
+        # ── 고정 기준값 (사용자 기준가와 무관)
+        existing_actual = naver_discounted + opt.option_price  # 네이버 실판매가 (고정)
+        unit_label, orig_unit_price = parse_unit_price(opt.option_name, existing_actual)
 
         # 옵션명
         with c0:
@@ -407,7 +416,7 @@ if st.session_state.selected_product:
         with c1:
             st.write(f"{opt.stock:,}개")
 
-        # 기존 옵션가 (상대값, 네이버)
+        # 기존 옵션가 (네이버 상대값)
         with c2:
             if opt.option_price == 0:
                 st.write("—")
@@ -415,6 +424,11 @@ if st.session_state.selected_product:
                 st.write(f"+{opt.option_price:,}원")
             else:
                 st.write(f"{opt.option_price:,}원")
+
+        # 기존 실판매가 (네이버 할인가 + 옵션가 — 고정)
+        with c2b:
+            st.markdown(f"<b style='color:#1a5276'>{existing_actual:,}원</b>",
+                        unsafe_allow_html=True)
 
         # 가중치 입력
         with c3:
@@ -429,12 +443,12 @@ if st.session_state.selected_product:
                 label_visibility="collapsed",
             )
 
-        # 변경 계산가
+        # 변경 계산가 = 가중치 × 사용자 기준가
         calc = round(base_price * w)
         with c4:
             st.markdown(f"**{calc:,}원**")
 
-        # 기준가 대비 (변경 계산가 - 기준가)
+        # 기준가 대비 (변경 계산가 - 사용자 기준가)
         vs_base = calc - base_price
         vs_color = "#1a7f37" if vs_base >= 0 else "#d73a49"
         vs_str = f"+{vs_base:,}" if vs_base >= 0 else f"{vs_base:,}"
@@ -444,20 +458,18 @@ if st.session_state.selected_product:
                 unsafe_allow_html=True,
             )
 
-        # 기존 단가 — 네이버 초기 할인가 + 옵션가 (고정값, 사용자 기준가 변경에 영향받지 않음)
-        existing_actual = naver_discounted + opt.option_price
-        unit_label, orig_unit_price = parse_unit_price(opt.option_name, existing_actual)
+        # 기존 단가 (기존 실판매가 ÷ 팩수 — 고정)
         with c6:
             if orig_unit_price is not None:
                 st.markdown(
-                    f"<span style='color:#888'>{orig_unit_price:,}원</span>"
+                    f"<span style='color:#555'>{orig_unit_price:,}원</span>"
                     f"<br><small style='color:#aaa'>{unit_label}</small>",
                     unsafe_allow_html=True,
                 )
             else:
                 st.write("—")
 
-        # 변경 단가 (변경 계산가 기준)
+        # 변경 단가 (변경 계산가 ÷ 팩수)
         _, new_unit_price = parse_unit_price(opt.option_name, calc)
         with c7:
             if new_unit_price is not None:
@@ -511,7 +523,7 @@ if st.session_state.selected_product:
 
         rows.append({
             "옵션명": opt.option_name,
-            "현재 실판매가": existing_actual,
+            "기존 실판매가": existing_actual,
             "가중치": w,
             "변경 계산가": calc_price,
             "기준가 대비": vs_base,
@@ -531,14 +543,14 @@ if st.session_state.selected_product:
         ))
 
     df = pd.DataFrame(rows)
-    avg_before = df["현재 실판매가"].mean()
+    avg_before = df["기존 실판매가"].mean()
     avg_after = df["변경 계산가"].mean()
 
     # 통계 배너
     s1, s2, s3, s4, s5 = st.columns(5)
     s1.metric("기준가", f"{base_price:,}원")
     s2.metric("변경 판매가", f"{new_sale_price:,}원")
-    s3.metric("평균 현재가", f"{avg_before:,.0f}원")
+    s3.metric("평균 기존 실판매가", f"{avg_before:,.0f}원")
     s4.metric("평균 변경가", f"{avg_after:,.0f}원")
     s5.metric("평균 변동", f"{avg_after - avg_before:+,.0f}원")
 
@@ -552,7 +564,7 @@ if st.session_state.selected_product:
     styled = (
         df.style
         .format({
-            "현재 실판매가": "{:,}원",
+            "기존 실판매가": "{:,}원",
             "가중치": "{:.2f}",
             "변경 계산가": "{:,}원",
             "기준가 대비": lambda v: f"+{v:,}원" if v >= 0 else f"{v:,}원",
