@@ -180,6 +180,7 @@ for key, default in [
     ("auto_loaded", False),
     ("last_query", ""),
     ("weights_initialized_for", ""),
+    ("prev_base_price", 0),   # 기준가 변경 감지용
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -285,18 +286,25 @@ if st.session_state.selected_product:
             max_value=99,
             value=48,
             step=1,
+            key="discount_rate_input",
             help="기준가 = 변경 판매가 × (1 - 할인율/100). 기본 48%",
         )
 
-        # 기준가 직접 입력 (기본값 = 네이버 할인가)
+        # 기준가 직접 입력 — 명시적 key로 세션 고정 (값이 임의로 초기화되지 않음)
         default_base = (product.discounted_price if product.discounted_price > 0
                         else product.sale_price)
+
+        # 상품이 바뀌면 세션의 base_price를 새 상품 기본값으로 리셋
+        if st.session_state.weights_initialized_for != display_id:
+            st.session_state["base_price_input"] = default_base
+
         base_price = st.number_input(
             "기준가 (원)",
             min_value=1,
-            value=default_base,
+            value=st.session_state.get("base_price_input", default_base),
             step=100,
-            help=f"변경 계산가 = 기준가 × 옵션가중치",
+            key="base_price_input",
+            help="변경 계산가 = 기준가 × 옵션가중치. 변경 시 가중치가 자동으로 재산출됩니다.",
         )
 
         # 기준가 → 변경된 판매가 역산 (할인율 기반)
@@ -327,12 +335,20 @@ if st.session_state.selected_product:
     # ──────────────────────────────────────────────
     st.subheader(f"⑤ 옵션별 가중치 설정 ({len(product.options)}개)")
 
-    # 새 상품이면 가중치 초기값 자동 설정 (기존 옵션가에서 역산)
+    # ── 가중치 초기화 조건 1: 새 상품 로드 시
     if st.session_state.weights_initialized_for != display_id:
         for opt in product.options:
             key = get_weight_key(opt.option_id)
             st.session_state[key] = suggest_weight(opt.option_price, base_price)
         st.session_state.weights_initialized_for = display_id
+        st.session_state.prev_base_price = base_price
+
+    # ── 가중치 초기화 조건 2: 기준가가 변경된 경우 → 가중치 자동 재산출
+    elif base_price != st.session_state.prev_base_price and base_price > 0:
+        for opt in product.options:
+            key = get_weight_key(opt.option_id)
+            st.session_state[key] = suggest_weight(opt.option_price, base_price)
+        st.session_state.prev_base_price = base_price
 
     col_hdr, col_delivery, col_reset = st.columns([3, 1.5, 1])
     with col_hdr:
@@ -343,6 +359,7 @@ if st.session_state.selected_product:
             min_value=0,
             value=3500,
             step=100,
+            key="delivery_fee_input",
             help="변경 계산가에서 택배비를 차감한 순단가를 계산합니다.",
         )
     with col_reset:
