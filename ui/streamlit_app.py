@@ -334,10 +334,19 @@ if st.session_state.selected_product:
             st.session_state[key] = suggest_weight(opt.option_price, base_price)
         st.session_state.weights_initialized_for = display_id
 
-    col_hdr, col_reset = st.columns([4, 1])
+    col_hdr, col_delivery, col_reset = st.columns([3, 1.5, 1])
     with col_hdr:
         st.caption("💡 가중치 초기값은 현재 옵션가에서 자동 역산됩니다. 기준가 변경 시 🔄 초기화로 재산출하세요.")
+    with col_delivery:
+        delivery_fee = st.number_input(
+            "📦 택배비 (원)",
+            min_value=0,
+            value=3500,
+            step=100,
+            help="변경 계산가에서 택배비를 차감한 순단가를 계산합니다.",
+        )
     with col_reset:
+        st.write("")
         if st.button("🔄 가중치 초기화", use_container_width=True):
             for opt in product.options:
                 st.session_state[get_weight_key(opt.option_id)] = suggest_weight(
@@ -345,8 +354,8 @@ if st.session_state.selected_product:
                 )
             st.rerun()
 
-    # 테이블 헤더: 옵션명 | 재고 | 기존옵션가 | 가중치 | 변경계산가 | 기준가대비 | 기존단가 | 변경단가
-    h0, h1, h2, h3, h4, h5, h6, h7 = st.columns([3.2, 0.9, 1.1, 0.9, 1.1, 1.1, 1.1, 1.1])
+    # 테이블 헤더: 옵션명 | 재고 | 기존옵션가 | 가중치 | 변경계산가 | 기준가대비 | 기존단가 | 변경단가 | 순단가(택배제외)
+    h0, h1, h2, h3, h4, h5, h6, h7, h8 = st.columns([3.0, 0.8, 1.0, 0.8, 1.0, 1.0, 1.0, 1.0, 1.1])
     h0.markdown("**옵션명**")
     h1.markdown("**재고**")
     h2.markdown("**기존 옵션가**")
@@ -355,6 +364,8 @@ if st.session_state.selected_product:
     h5.markdown("**기준가 대비**")
     h6.markdown("**기존 단가**")
     h7.markdown("**변경 단가**")
+    h8.markdown(f"**순단가**<br><small style='color:#888;font-weight:normal'>택배비 {delivery_fee:,}원 제외</small>",
+                unsafe_allow_html=True)
     st.markdown("---")
 
     # 옵션 행 렌더링
@@ -363,7 +374,7 @@ if st.session_state.selected_product:
         if key not in st.session_state:
             st.session_state[key] = suggest_weight(opt.option_price, base_price)
 
-        c0, c1, c2, c3, c4, c5, c6, c7 = st.columns([3.2, 0.9, 1.1, 0.9, 1.1, 1.1, 1.1, 1.1])
+        c0, c1, c2, c3, c4, c5, c6, c7, c8 = st.columns([3.0, 0.8, 1.0, 0.8, 1.0, 1.0, 1.0, 1.0, 1.1])
 
         # 옵션명
         with c0:
@@ -438,6 +449,22 @@ if st.session_state.selected_product:
             else:
                 st.write("—")
 
+        # 순단가 (변경 계산가 - 택배비) ÷ 팩수
+        net_calc = max(0, calc - delivery_fee)
+        _, net_unit_price = parse_unit_price(opt.option_name, net_calc)
+        with c8:
+            if net_unit_price is not None:
+                diff_net = net_unit_price - (new_unit_price or net_unit_price)
+                diff_color = "#d73a49" if diff_net < 0 else "#888"
+                diff_str = f"{diff_net:,}" if diff_net >= 0 else f"{diff_net:,}"
+                st.markdown(
+                    f"<b style='color:#1a5276'>{net_unit_price:,}원</b>"
+                    f"<br><small style='color:{diff_color}'>{diff_str}</small>",
+                    unsafe_allow_html=True,
+                )
+            else:
+                st.write("—")
+
     st.divider()
 
     # ──────────────────────────────────────────────
@@ -456,6 +483,8 @@ if st.session_state.selected_product:
         unit_label, unit_price = parse_unit_price(opt.option_name, calc_price)
 
         _, orig_unit_price = parse_unit_price(opt.option_name, existing_actual)
+        net_calc_price = max(0, calc_price - delivery_fee)
+        _, net_unit_price = parse_unit_price(opt.option_name, net_calc_price)
 
         rows.append({
             "옵션명": opt.option_name,
@@ -465,6 +494,7 @@ if st.session_state.selected_product:
             "기준가 대비": vs_base,
             "기존 단가": f"{orig_unit_price:,}원 ({unit_label})" if orig_unit_price else "—",
             "변경 단가": f"{unit_price:,}원 ({unit_label})" if unit_price else "—",
+            f"순단가(택배-{delivery_fee:,})": f"{net_unit_price:,}원 ({unit_label})" if net_unit_price else "—",
             "재고(개)": opt.stock,
         })
 
