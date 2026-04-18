@@ -1,46 +1,132 @@
-# 옵션명 기반 가격 계산 엔진 — Cursor 프로젝트 규칙
+# 모디바 옵션 가격 계산기 — Cursor 프로젝트 규칙 (최종 완성본)
+# 마지막 업데이트: 2026-04-18
 
-## 프로젝트 목적
-네이버 커머스 API 상품 데이터를 조회한 뒤 옵션 가격을 재계산하고 엑셀로 출력하는 도구.
+## ───────────────────────────────────────────
+## 1. 프로젝트 기본 정보
+## ───────────────────────────────────────────
 
-## 절대 금지 사항
+프로젝트명: 모디바 옵션 가격 계산기
+목적: 네이버 커머스 API 상품 데이터를 조회하여 옵션별 가중치 기반 가격을 재계산하고 엑셀로 출력
+운영 URL: https://modiba-option-app-production.up.railway.app
+GitHub: https://github.com/modiba0-master/modiba_option.git
+Railway 프로젝트: modiba_option / 서비스: modiba-option-app
+Railway 고정 IP: 208.77.244.15 (네이버 API 화이트리스트 등록 완료)
+
+## ───────────────────────────────────────────
+## 2. 절대 금지 사항
+## ───────────────────────────────────────────
+
 - 네이버 상품 가격 수정 API(PATCH/PUT) 호출 금지
 - 옵션 가격 자동 반영(서버→외부 전송) 금지
 - 백그라운드 자동 실행 작업 금지
 - 데이터베이스 저장 금지 (초기 버전)
-- 위 금지 항목과 관련된 코드, 함수, 엔드포인트를 생성하지 말 것
+- 위 금지 항목 관련 코드, 함수, 엔드포인트 생성 금지
 
-## 기술 스택
-- FastAPI: 백엔드 API (조회 + 계산 결과 반환 전용)
-- Streamlit: 사용자 UI
-- Python 3.11+
-- openpyxl: 엑셀 생성
-- httpx: 비동기 HTTP 클라이언트
-- Pydantic v2: 데이터 모델
+## ───────────────────────────────────────────
+## 3. 기술 스택 및 환경
+## ───────────────────────────────────────────
 
-## 개발 원칙
-- Harness First: 기능 구현 전에 반드시 테스트 먼저 작성
-- 모든 계산은 명확한 규칙 기반으로 처리한다 (추측/확률 기반 로직 금지)
-- 재현 가능하고 일관된 결과를 우선한다
-- 한글 기반 코드 주석 및 로그 메시지 사용
-- 정중한 어조 유지
+언어: Python 3.11+
+UI: Streamlit (ui/streamlit_app.py — 수정 주 대상)
+API 서버: FastAPI (main.py, app/routes/)
+인증: 네이버 커머스 API v2 (bcrypt 서명)
+패키지: httpx, pydantic v2, openpyxl, bcrypt, pybase64
 
-## 가격 계산 공식
-P_option = P_base × W_weight × W_part × W_storage
-- 결과는 정수로 반올림(round)
-- 미등록 키워드는 1.0(기본값) 적용
+### 네이버 커머스 API
+- 인증: bcrypt.hashpw(f"{client_id}_{timestamp}", client_secret) → Base64
+- 토큰: POST /external/v1/oauth2/token
+- 상품: GET /external/v2/products/channel-products/{id} (우선)
+         GET /external/v2/products/origin-products/{id} (fallback)
+- 환경변수:
+  NAVER_COMMERCE_API_CLIENT_ID = CFKugaEoCihTsC7JRAnE0
+  NAVER_COMMERCE_API_CLIENT_SECRET = $2a$04$KocbA52MQNLUA5eEh5HTl.
+  DEFAULT_PRODUCT_ID = 6774969928
 
-## 폴더 구조
-- app/routes/     : FastAPI 라우터 (product.py, calculate.py)
-- app/services/   : 비즈니스 로직 (parser, price_engine, weight_manager, naver_api, excel_exporter)
-- app/models/     : Pydantic 데이터 모델
-- ui/             : Streamlit 앱
-- tests/          : pytest 테스트
+## ───────────────────────────────────────────
+## 4. 폴더 구조
+## ───────────────────────────────────────────
 
-## 코드 생성 지침
-- 새 서비스 함수 추가 시 반드시 tests/ 에 대응 테스트 추가
-- 엔드포인트는 GET(조회) 또는 POST(계산 요청) 만 허용
-- 옵션명 파서(parser.py)는 정규식 기반, 부분매칭 허용
+app/
+  routes/   product.py, calculate.py
+  services/ naver_api.py, parser.py, price_engine.py,
+            weight_manager.py, excel_exporter.py
+  models/   product_model.py
+ui/
+  streamlit_app.py  ← 대시보드 수정 시 이 파일만 수정
+tests/
+  test_parser.py, test_price_engine.py, test_naver_api_access.py
+main.py          ← FastAPI 진입점
+railway.json     ← Railway 배포 설정
+requirements.txt
+
+## ───────────────────────────────────────────
+## 5. 대시보드 구조 (ui/streamlit_app.py)
+## ───────────────────────────────────────────
+
+### 사이드바
+- 네이버 API 연결 상태 표시
+- 개발자 도구 (접힌 expander): 서버 IP 확인, API 연결 테스트
+
+### 메인 화면 단계
+① 상품 검색  : 상품ID / 상품명 입력 + 검색 버튼
+② 상품 선택  : 필터 텍스트 + 테이블 (상품ID, 상품명, 판매가, 할인가, 옵션수) + 행 클릭 선택
+③ 상품 상세  : 네이버 원본 (판매가/기본할인/할인가) — 고정, 변경 불가
+④ 기준가 설정: 할인율(%), 기준가(원), 변경판매가 자동 역산 표시
+⑤ 옵션별 가중치 설정 (핵심)
+   - 컬럼 10개: 옵션명|재고|기존옵션가|기존실판매가|가중치|변경계산가|기준가대비|기존단가|변경단가|순단가
+   - 택배비 입력 (기본 3,500원, 수정 가능)
+   - 가중치 초기화 버튼
+⑥ 계산 결과 요약 테이블 (5개 통계 + DataFrame)
+⑦ 엑셀 다운로드 (⑤ 구조 기준 생성)
+
+### 핵심 계산 로직
+- 기존 실판매가 = product.discounted_price + opt.option_price  ← 절대 고정
+- 초기 가중치   = 기존실판매가 / 네이버할인가  (product.discounted_price 기준)
+- 변경 계산가   = 가중치 × 사용자 기준가
+- 기준가 대비   = 변경계산가 - 사용자 기준가
+- 기존 단가     = 기존실판매가 / 팩수
+- 변경 단가     = 변경계산가 / 팩수
+- 순단가        = (변경계산가 - 택배비) / 팩수
+- 가중치는 기준가 변경 시 자동 재산출 안 함 (수동 조정 전용)
+- 가중치 초기화 시에도 naver_discounted 기준으로 재산출
+
+### 단가 파싱 우선순위 (parse_unit_price)
+1. (XkgXN팩) / (XgXN팩)  → 팩당 단가
+2. Nkg 포함 옵션명        → 1kg당 단가 = price / N
+3. Ng  포함 옵션명        → 100g당 단가 = price × 100 / N
+
+### 세션 상태 주요 키
+- weights_initialized_for : 현재 가중치가 초기화된 product_id
+- base_price_input        : 사용자 기준가 (key 고정)
+- discount_rate_input     : 할인율 (key 고정)
+- delivery_fee_input      : 택배비 (key 고정)
+- opt_w_{option_id}       : 각 옵션별 가중치
+
+## ───────────────────────────────────────────
+## 6. Railway 배포 방법
+## ───────────────────────────────────────────
+
+# 로컬 → GitHub → Railway 순서
+git add ui/streamlit_app.py   # 대시보드만 수정 시
+git commit -m "..."
+git push origin master
+
+railway service "modiba-option-app"
+railway up --detach
+
+# 배포 확인
+railway logs --deployment | Select-Object -Last 6
+# "External URL: http://208.77.244.15:8080" 확인 시 성공
+
+## ───────────────────────────────────────────
+## 7. 개발 원칙
+## ───────────────────────────────────────────
+
+- 대시보드(ui/streamlit_app.py)만 수정 — 다른 서비스 파일 가급적 유지
+- 새 기능은 기존 대시보드 틀 안에서 추가 (섹션 번호 ①~⑦ 유지)
+- 모든 계산은 명확한 규칙 기반, 추측/확률 로직 금지
+- 한글 주석 및 UI 텍스트 사용
+- 조회 + 계산 + 엑셀 출력 전용 — 가격 자동반영 절대 없음
 
 Always prioritize deterministic rule-based parsing and pricing over heuristic or probabilistic approaches.
 All outputs must be explainable and reproducible.
