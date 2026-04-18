@@ -1,7 +1,5 @@
 """
 Streamlit UI - 옵션명 기반 가격 계산 엔진
-
-실행: streamlit run ui/streamlit_app.py
 """
 
 import asyncio
@@ -28,154 +26,120 @@ from app.models.product_model import CalculationResult
 # 페이지 설정
 # ──────────────────────────────────────────────
 st.set_page_config(
-    page_title="옵션 가격 계산 엔진",
+    page_title="모디바 옵션 가격 계산기",
     page_icon="🧮",
     layout="wide",
 )
 
+DEFAULT_PRODUCT_ID = os.getenv("DEFAULT_PRODUCT_ID", "6774969928")
+
 # ──────────────────────────────────────────────
-# 사이드바: 서버 정보 및 서버 IP 확인
+# CSS
+# ──────────────────────────────────────────────
+st.markdown("""
+<style>
+[data-testid="stMetricValue"] { font-size: 1.5rem; font-weight: 700; }
+[data-testid="stMetricLabel"] { font-size: 0.85rem; color: #555; }
+.block-container { padding-top: 1.2rem; padding-bottom: 2rem; }
+div[data-testid="stDataFrame"] { border: 1px solid #e0e0e0; border-radius: 8px; }
+.stAlert { border-radius: 8px; }
+h3 { margin-top: 0.5rem !important; }
+</style>
+""", unsafe_allow_html=True)
+
+# ──────────────────────────────────────────────
+# 사이드바
 # ──────────────────────────────────────────────
 def _get_server_ip() -> str:
     import urllib.request
-    sources = ["https://api.ipify.org", "https://ifconfig.me/ip", "https://icanhazip.com"]
-    for url in sources:
+    for url in ["https://api.ipify.org", "https://icanhazip.com"]:
         try:
             return urllib.request.urlopen(url, timeout=5).read().decode().strip()
         except Exception:
             continue
     return "조회 실패"
 
+
 def _test_naver_api() -> dict:
-    """Railway 서버에서 네이버 커머스 API 연결을 직접 테스트합니다."""
-    import asyncio, base64, time, hashlib
-    import bcrypt
-    import httpx
+    import base64, time
+    import bcrypt, httpx
 
-    client_id = os.getenv("NAVER_COMMERCE_API_CLIENT_ID", "")
-    client_secret = os.getenv("NAVER_COMMERCE_API_CLIENT_SECRET", "")
+    cid = os.getenv("NAVER_COMMERCE_API_CLIENT_ID", "")
+    csecret = os.getenv("NAVER_COMMERCE_API_CLIENT_SECRET", "")
+    if not cid or not csecret:
+        return {"ok": False, "msg": "환경변수 미설정"}
 
-    if not client_id or not client_secret:
-        return {"step": "자격증명", "ok": False, "msg": "환경변수 미설정"}
+    ts = int(time.time() * 1000)
+    hashed = bcrypt.hashpw(f"{cid}_{ts}".encode(), csecret.encode())
+    sig = base64.b64encode(hashed).decode()
 
-    timestamp = int(time.time() * 1000)
-    password = f"{client_id}_{timestamp}"
-    hashed = bcrypt.hashpw(password.encode("utf-8"), client_secret.encode("utf-8"))
-    signature = base64.b64encode(hashed).decode("utf-8")
-
-    token_url = "https://api.commerce.naver.com/external/v1/oauth2/token"
     try:
-        r = httpx.post(token_url, data={
-            "client_id": client_id,
-            "timestamp": timestamp,
-            "client_secret_sign": signature,
-            "grant_type": "client_credentials",
-            "type": "SELF",
-        }, headers={"Content-Type": "application/x-www-form-urlencoded"}, timeout=10)
-        data = r.json()
+        r = httpx.post(
+            "https://api.commerce.naver.com/external/v1/oauth2/token",
+            data={"client_id": cid, "timestamp": ts, "client_secret_sign": sig,
+                  "grant_type": "client_credentials", "type": "SELF"},
+            headers={"Content-Type": "application/x-www-form-urlencoded"}, timeout=10,
+        )
+        d = r.json()
     except Exception as e:
-        return {"step": "토큰발급", "ok": False, "msg": str(e)}
+        return {"ok": False, "msg": str(e)}
 
-    if r.status_code != 200 or "access_token" not in data:
-        code = data.get("code", "")
-        msg = data.get("message", r.text[:200])
-        return {"step": "토큰발급", "ok": False, "status": r.status_code, "code": code, "msg": msg}
+    if r.status_code != 200 or "access_token" not in d:
+        return {"ok": False, "code": d.get("code", ""), "msg": d.get("message", "")[:100]}
 
-    token = data["access_token"]
-
-    # 상품 상세 조회
-    product_url = f"https://api.commerce.naver.com/external/v1/products/{DEFAULT_PRODUCT_ID}"
-    try:
-        pr = httpx.get(product_url, headers={"Authorization": f"Bearer {token}"}, timeout=10)
-        pdata = pr.json()
-    except Exception as e:
-        return {"step": "토큰OK/상품조회", "ok": False, "msg": str(e), "token_prefix": token[:20]}
-
-    return {
-        "step": "완료",
-        "ok": pr.status_code == 200,
-        "token_status": 200,
-        "product_status": pr.status_code,
-        "product_code": pdata.get("code", ""),
-        "product_msg": pdata.get("message", "")[:100] if pr.status_code != 200 else "OK",
-        "product_name": pdata.get("originProduct", {}).get("name", "") or pdata.get("productName", ""),
-        "token_prefix": token[:20],
-    }
+    return {"ok": True, "token_prefix": d["access_token"][:20]}
 
 
 with st.sidebar:
-    st.markdown("### ⚙️ 서버 정보")
-    col_ip, = st.columns([1])
-    if st.button("🌐 Railway 서버 IP 확인", use_container_width=True):
-        with st.spinner("서버 IP 조회 중..."):
-            ip = _get_server_ip()
-        st.session_state["server_ip"] = ip
-
-    if "server_ip" in st.session_state:
-        st.code(st.session_state["server_ip"], language=None)
-        st.caption("👆 네이버 커머스 API 화이트리스트에 등록하세요")
-
-    st.divider()
-
-    st.markdown("### 🔌 API 연결 테스트")
-    if st.button("🧪 네이버 API 호출 테스트", use_container_width=True, type="primary"):
-        with st.spinner("Railway 서버에서 API 호출 중..."):
-            result = _test_naver_api()
-        st.session_state["api_test_result"] = result
-
-    if "api_test_result" in st.session_state:
-        res = st.session_state["api_test_result"]
-        if res.get("ok"):
-            st.success(f"✅ API 연결 성공!")
-            if res.get("product_name"):
-                st.info(f"상품명: {res['product_name']}")
-            st.caption(f"토큰: {res.get('token_prefix','')}...")
-        else:
-            st.error(f"❌ 실패 — {res.get('step','')}")
-            code = res.get("code", "")
-            msg = res.get("msg", "")
-            if "IP_NOT_ALLOWED" in code:
-                st.warning(f"IP 미등록: {_get_server_ip()}")
-            elif "NotFound" in code or res.get("product_status") == 404:
-                st.info("토큰 발급 성공. 상품ID가 해당 스토어에 없거나 권한 없음.")
-                st.caption(f"토큰: {res.get('token_prefix','')[:20]}...")
-            else:
-                st.caption(f"코드: {code} / {msg}")
-
-    st.divider()
-    st.markdown("### 📌 API 상태")
-    api_status = os.getenv("NAVER_COMMERCE_API_CLIENT_ID", "")
-    if api_status:
-        st.success("API 자격증명 설정됨")
+    # ── API 상태 표시
+    cid_set = bool(os.getenv("NAVER_COMMERCE_API_CLIENT_ID", ""))
+    if cid_set:
+        st.success("✅ 네이버 API 연결됨")
     else:
-        st.error("API 자격증명 미설정")
-    st.caption(f"기본 상품ID: `{os.getenv('DEFAULT_PRODUCT_ID', '6774969928')}`")
-    st.markdown("[📋 네이버 커머스 개발자센터](https://sell.smartstore.naver.com/#/seller/api)")
+        st.error("❌ API 자격증명 미설정")
+    st.caption(f"기본 상품ID: **{DEFAULT_PRODUCT_ID}**")
+
+    st.divider()
+
+    # ── 개발자 도구 (접힌 상태)
+    with st.expander("🛠️ 개발자 도구", expanded=False):
+        if st.button("🌐 서버 IP 확인", use_container_width=True):
+            with st.spinner("조회 중..."):
+                ip = _get_server_ip()
+            st.session_state["server_ip"] = ip
+
+        if "server_ip" in st.session_state:
+            st.code(st.session_state["server_ip"], language=None)
+            st.caption("👆 네이버 API 화이트리스트 등록 IP")
+
+        st.markdown("---")
+
+        if st.button("🧪 API 연결 테스트", use_container_width=True):
+            with st.spinner("테스트 중..."):
+                res = _test_naver_api()
+            st.session_state["api_test"] = res
+
+        if "api_test" in st.session_state:
+            res = st.session_state["api_test"]
+            if res.get("ok"):
+                st.success("API 정상")
+                st.caption(f"토큰: {res.get('token_prefix','')}...")
+            else:
+                st.error(f"실패: {res.get('code','')} {res.get('msg','')}")
+
+    st.divider()
+    st.markdown(
+        "<small>조회 + 계산 + 엑셀 출력 전용<br>가격 자동반영 기능 없음</small>",
+        unsafe_allow_html=True,
+    )
+
 
 # ──────────────────────────────────────────────
-# CSS 스타일
+# 헤더
 # ──────────────────────────────────────────────
-st.markdown("""
-<style>
-[data-testid="stMetricValue"] { font-size: 1.4rem; font-weight: bold; }
-.block-container { padding-top: 1.5rem; }
-div[data-testid="stDataFrame"] { border: 1px solid #e0e0e0; border-radius: 6px; }
-.stAlert { border-radius: 6px; }
-</style>
-""", unsafe_allow_html=True)
-
-st.title("🧮 옵션명 기반 가격 계산 엔진")
+st.title("🧮 모디바 옵션 가격 계산기")
 st.caption("네이버 커머스 상품의 옵션 가격을 가중치 기반으로 재계산하고 엑셀로 출력합니다.")
-st.info(
-    "🔒 본 도구는 **조회 + 계산 + 엑셀 출력** 전용입니다. "
-    "네이버 서버에 가격을 반영하는 기능은 포함되어 있지 않습니다.",
-)
 st.divider()
-
-# ──────────────────────────────────────────────
-# 기본 상품 번호 (환경변수 또는 고정값)
-# ──────────────────────────────────────────────
-DEFAULT_PRODUCT_ID = os.getenv("DEFAULT_PRODUCT_ID", "6774969928")
 
 
 # ──────────────────────────────────────────────
@@ -187,8 +151,7 @@ def run_async(coro):
         if loop.is_running():
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor() as pool:
-                future = pool.submit(asyncio.run, coro)
-                return future.result()
+                return pool.submit(asyncio.run, coro).result()
         return loop.run_until_complete(coro)
     except RuntimeError:
         return asyncio.run(coro)
@@ -197,219 +160,267 @@ def run_async(coro):
 # ──────────────────────────────────────────────
 # 세션 초기화
 # ──────────────────────────────────────────────
-if "search_results" not in st.session_state:
-    st.session_state.search_results = []
-if "selected_product" not in st.session_state:
-    st.session_state.selected_product = None
-if "calc_results" not in st.session_state:
-    st.session_state.calc_results = None
-if "auto_loaded" not in st.session_state:
-    st.session_state.auto_loaded = False
+for key, default in [
+    ("search_results", []),
+    ("selected_product", None),
+    ("calc_results", None),
+    ("auto_loaded", False),
+    ("last_query", ""),
+]:
+    if key not in st.session_state:
+        st.session_state[key] = default
 
 
 # ──────────────────────────────────────────────
 # 기본 상품 자동 로드 (최초 1회)
 # ──────────────────────────────────────────────
 if not st.session_state.auto_loaded:
-    with st.spinner(f"기본 상품({DEFAULT_PRODUCT_ID})을 불러오는 중..."):
+    with st.spinner(f"상품 {DEFAULT_PRODUCT_ID} 불러오는 중..."):
         product = run_async(naver_api.get_product_detail(DEFAULT_PRODUCT_ID))
     if product:
+        # API에서 product_id가 비면 검색한 ID로 채움
+        if not product.product_id:
+            product = product.model_copy(update={"product_id": DEFAULT_PRODUCT_ID})
         st.session_state.selected_product = product
         st.session_state.search_results = [product]
     st.session_state.auto_loaded = True
 
 
 # ──────────────────────────────────────────────
-# 1. 검색 영역
+# ① 검색
 # ──────────────────────────────────────────────
-st.subheader("1️⃣ 상품 검색")
-col_search, col_btn = st.columns([4, 1])
+st.subheader("① 상품 검색")
+col_search, col_btn = st.columns([5, 1])
 with col_search:
     query = st.text_input(
-        "상품ID 또는 상품명을 입력하세요",
-        placeholder="예: 6774969928, 닭가슴살",
-        value="",
+        "상품ID 또는 상품명",
+        placeholder="예: 6774969928",
+        label_visibility="collapsed",
     )
 with col_btn:
-    st.write("")
     search_clicked = st.button("🔍 검색", use_container_width=True)
 
 if search_clicked and query.strip():
-    with st.spinner("상품을 검색 중입니다..."):
+    with st.spinner("검색 중..."):
         results = run_async(naver_api.search_products(query.strip()))
+    # 검색 결과에도 product_id 빈 값 보완
+    for p in results:
+        if not p.product_id and query.strip().isdigit():
+            p.product_id = query.strip()
     st.session_state.search_results = results
     st.session_state.selected_product = None
     st.session_state.calc_results = None
+    st.session_state.last_query = query.strip()
     if not results:
-        st.warning("검색 결과가 없습니다. 상품ID를 정확히 입력해 주세요.")
+        st.warning("검색 결과가 없습니다.")
 
 
 # ──────────────────────────────────────────────
-# 2. 상품 선택
+# ② 상품 선택
 # ──────────────────────────────────────────────
 if st.session_state.search_results:
-    st.subheader("2️⃣ 상품 선택")
-    product_options = {
-        f"[{p.product_id}] {p.product_name}": p
-        for p in st.session_state.search_results
-    }
-    default_idx = 0
+    st.subheader("② 상품 선택")
+    product_options = {}
+    for p in st.session_state.search_results:
+        pid = p.product_id or st.session_state.last_query or DEFAULT_PRODUCT_ID
+        label = f"[{pid}] {p.product_name}" if p.product_name else f"[{pid}]"
+        product_options[label] = p
+
     labels = list(product_options.keys())
+    default_idx = 0
     if st.session_state.selected_product:
+        sp_id = st.session_state.selected_product.product_id
         for i, lbl in enumerate(labels):
-            if st.session_state.selected_product.product_id in lbl:
+            if sp_id and sp_id in lbl:
                 default_idx = i
                 break
 
-    selected_label = st.selectbox(
-        "검색된 상품 목록",
-        labels,
-        index=default_idx,
-    )
+    selected_label = st.selectbox("상품 목록", labels, index=default_idx, label_visibility="collapsed")
     if selected_label:
         st.session_state.selected_product = product_options[selected_label]
 
 
 # ──────────────────────────────────────────────
-# 3. 상품 상세 + 4. 가중치 설정
+# ③ 상품 상세 + ④ 가중치
 # ──────────────────────────────────────────────
 if st.session_state.selected_product:
     product = st.session_state.selected_product
+    display_id = product.product_id or DEFAULT_PRODUCT_ID
     st.divider()
 
     col_detail, col_weight = st.columns([3, 2])
 
     with col_detail:
-        st.subheader("3️⃣ 상품 상세")
-        st.markdown(f"**상품명:** {product.product_name}")
-        st.markdown(f"**상품ID:** `{product.product_id}`")
+        # 상품 기본 정보
+        st.subheader("③ 상품 상세")
+        st.markdown(f"**{product.product_name}**")
+        st.caption(f"상품 번호: {display_id}")
 
-        c1, c2, c3 = st.columns(3)
-        c1.metric("판매가", f"{product.sale_price:,}원")
-        c2.metric("기본할인", f"{product.discount_amount:,}원")
-        c3.metric("할인가", f"{product.discounted_price:,}원")
+        m1, m2, m3 = st.columns(3)
+        m1.metric("판매가", f"{product.sale_price:,}원")
+        m2.metric("기본할인", f"▼ {product.discount_amount:,}원")
+        m3.metric("할인가", f"{product.discounted_price:,}원")
 
-        # ── 5. 기준가 설정
-        st.subheader("5️⃣ 계산 기준가 설정")
+        st.markdown("")
+
+        # 기준가 설정
+        st.subheader("⑤ 계산 기준가")
         default_base = product.discounted_price if product.discounted_price > 0 else product.sale_price
         base_price = st.number_input(
-            "계산에 사용할 기준가 (원) — 직접 수정 가능",
+            "기준가 (원)",
             min_value=1,
             value=default_base,
             step=100,
-            help="이 값을 기준으로 P_option = 기준가 × W_중량 × W_부위 × W_보관 을 계산합니다.",
+            help="P_option = 기준가 × W_중량 × W_부위 × W_보관",
+            label_visibility="collapsed",
         )
+        st.caption(f"기준가: **{base_price:,}원** (할인가 기준, 직접 수정 가능)")
 
-        # ── 옵션 목록 표시
-        st.subheader("📋 옵션 목록")
+        st.markdown("")
+
+        # 옵션 목록
+        st.subheader(f"📋 현재 옵션 목록 ({len(product.options)}개)")
         if product.options:
             opt_df = pd.DataFrame([
                 {
-                    "옵션ID": o.option_id,
                     "옵션명": o.option_name,
-                    "옵션가(기존)": f"{o.option_price:,}원",
-                    "재고": o.stock,
+                    "옵션가": f"{o.option_price:,}원" if o.option_price else "—",
+                    "재고": f"{o.stock:,}개",
+                    "옵션ID": o.option_id,
                 }
                 for o in product.options
             ])
-            st.dataframe(opt_df, use_container_width=True, hide_index=True)
+            st.dataframe(opt_df, use_container_width=True, hide_index=True, height=280)
         else:
             st.info("옵션 정보가 없습니다.")
 
     with col_weight:
-        st.subheader("4️⃣ 가중치 설정")
-        st.caption("각 속성 가중치를 수정하면 계산값이 바뀝니다.")
+        st.subheader("④ 가중치 설정")
+        st.caption("속성별 가중치를 조정하면 계산가가 바뀝니다.")
 
         with st.expander("⚖️ 중량 가중치", expanded=True):
             weight_map = {}
-            for key, default_val in DEFAULT_WEIGHT_MAP.items():
+            for key, dv in DEFAULT_WEIGHT_MAP.items():
                 weight_map[key] = st.number_input(
-                    key, min_value=0.01, max_value=10.0,
-                    value=default_val, step=0.01, key=f"w_{key}",
+                    f"{key}", min_value=0.01, max_value=10.0,
+                    value=dv, step=0.01, format="%.2f", key=f"w_{key}",
                 )
 
         with st.expander("🍗 부위 가중치", expanded=True):
             part_map = {}
-            for key, default_val in DEFAULT_PART_MAP.items():
+            for key, dv in DEFAULT_PART_MAP.items():
                 part_map[key] = st.number_input(
-                    key, min_value=0.01, max_value=10.0,
-                    value=default_val, step=0.01, key=f"p_{key}",
+                    f"{key}", min_value=0.01, max_value=10.0,
+                    value=dv, step=0.01, format="%.2f", key=f"p_{key}",
                 )
 
         with st.expander("❄️ 보관방식 가중치", expanded=True):
             storage_map = {}
-            for key, default_val in DEFAULT_STORAGE_MAP.items():
+            for key, dv in DEFAULT_STORAGE_MAP.items():
                 storage_map[key] = st.number_input(
-                    key, min_value=0.01, max_value=10.0,
-                    value=default_val, step=0.01, key=f"s_{key}",
+                    f"{key}", min_value=0.01, max_value=10.0,
+                    value=dv, step=0.01, format="%.2f", key=f"s_{key}",
                 )
 
+        st.markdown("")
+        st.info(
+            "**계산 공식**\n\n"
+            "변경가 = 기준가 × 중량 × 부위 × 보관",
+            icon="📐",
+        )
+
+
     # ──────────────────────────────────────────────
-    # 6. 계산 실행 + 미리보기
+    # ⑥ 계산 실행
     # ──────────────────────────────────────────────
     st.divider()
-    st.subheader("6️⃣ 계산 실행 및 미리보기")
+    st.subheader("⑥ 계산 실행 및 미리보기")
 
     if st.button("🧮 가격 계산 실행", use_container_width=True, type="primary"):
-        config = WeightConfig()
-        config.update(weight_map=weight_map, part_map=part_map, storage_map=storage_map)
-        calculated = calculate_all_options(base_price, product.options, config)
-        st.session_state.calc_results = CalculationResult(
-            product_id=product.product_id,
-            product_name=product.product_name,
-            sale_price=product.sale_price,
-            discount_amount=product.discount_amount,
-            discounted_price=product.discounted_price,
-            base_price_used=base_price,
-            options=calculated,
-        )
+        if not product.options:
+            st.warning("옵션 정보가 없어 계산할 수 없습니다.")
+        else:
+            config = WeightConfig()
+            config.update(weight_map=weight_map, part_map=part_map, storage_map=storage_map)
+            calculated = calculate_all_options(base_price, product.options, config)
+            st.session_state.calc_results = CalculationResult(
+                product_id=display_id,
+                product_name=product.product_name,
+                sale_price=product.sale_price,
+                discount_amount=product.discount_amount,
+                discounted_price=product.discounted_price,
+                base_price_used=base_price,
+                options=calculated,
+            )
 
     if st.session_state.calc_results:
         result = st.session_state.calc_results
 
-        # 요약 배너
         st.success(
-            f"✅ 계산 완료 — 상품: **{result.product_name}** | "
-            f"기준가: **{result.base_price_used:,}원** | "
-            f"옵션 수: **{len(result.options)}개**"
+            f"계산 완료 | 상품: **{result.product_name[:30]}{'...' if len(result.product_name) > 30 else ''}** "
+            f"| 기준가: **{result.base_price_used:,}원** | 총 **{len(result.options)}개** 옵션"
         )
 
-        # 비교 테이블
-        preview_rows = []
+        # 비교 테이블 구성
+        rows = []
         for o in result.options:
             diff = o.calculated_price - o.original_price
-            diff_str = f"+{diff:,}" if diff >= 0 else f"{diff:,}"
-            preview_rows.append({
+            rows.append({
                 "옵션명": o.option_name,
                 "중량": o.weight or "—",
                 "부위": o.part or "—",
                 "보관": o.storage or "—",
-                "옵션가(기존)": o.original_price,
-                "변경옵션가": o.calculated_price,
-                "차이": diff_str,
+                "기존 옵션가": o.original_price,
+                "변경 옵션가": o.calculated_price,
+                "차이(원)": diff,
                 "재고": o.stock,
             })
 
-        preview_df = pd.DataFrame(preview_rows)
+        df = pd.DataFrame(rows)
 
-        # 숫자 컬럼 포맷
-        def highlight_diff(val):
-            if isinstance(val, str) and val.startswith("+"):
-                return "color: #1a7f37; font-weight: bold"
-            if isinstance(val, str) and val.startswith("-"):
-                return "color: #d73a49; font-weight: bold"
+        # 숫자 포맷 및 하이라이트
+        def fmt_price(v):
+            return f"{v:,}" if isinstance(v, (int, float)) else v
+
+        def color_diff(v):
+            if isinstance(v, (int, float)):
+                if v > 0:
+                    return "color: #1a7f37; font-weight:bold"
+                if v < 0:
+                    return "color: #d73a49; font-weight:bold"
             return ""
 
-        styled = preview_df.style.applymap(highlight_diff, subset=["차이"])
-        st.dataframe(styled, use_container_width=True, hide_index=True)
+        styled = (
+            df.style
+            .format({
+                "기존 옵션가": "{:,}원",
+                "변경 옵션가": "{:,}원",
+                "차이(원)": lambda v: f"+{v:,}" if v >= 0 else f"{v:,}",
+                "재고": "{:,}개",
+            })
+            .applymap(color_diff, subset=["차이(원)"])
+        )
 
-        # ── 7. 엑셀 다운로드
+        st.dataframe(styled, use_container_width=True, hide_index=True, height=320)
+
+        # 간단 통계
+        avg_before = df["기존 옵션가"].mean()
+        avg_after = df["변경 옵션가"].mean()
+        s1, s2, s3 = st.columns(3)
+        s1.metric("평균 기존 옵션가", f"{avg_before:,.0f}원")
+        s2.metric("평균 변경 옵션가", f"{avg_after:,.0f}원")
+        s3.metric("평균 변동", f"{avg_after - avg_before:+,.0f}원")
+
+        # ⑦ 엑셀 다운로드
         st.divider()
-        st.subheader("7️⃣ 엑셀 다운로드")
-        col_dl1, col_dl2 = st.columns([3, 1])
-        with col_dl1:
-            st.caption(f"파일명: option_price_{result.product_id}.xlsx — 총 {len(result.options)}개 옵션")
-        with col_dl2:
+        st.subheader("⑦ 엑셀 다운로드")
+        c_info, c_btn = st.columns([3, 1])
+        with c_info:
+            st.caption(
+                f"파일명: `option_price_{result.product_id}.xlsx` "
+                f"| {len(result.options)}개 옵션 | 기준가 {result.base_price_used:,}원"
+            )
+        with c_btn:
             excel_bytes = build_excel_bytes(result)
             st.download_button(
                 label="📥 엑셀 다운로드",
