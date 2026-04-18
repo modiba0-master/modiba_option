@@ -15,10 +15,10 @@
 import logging
 import os
 import time
-import hashlib
-import hmac
 import base64
 from typing import List, Optional
+
+import bcrypt
 
 import httpx
 from app.models.product_model import OptionItem, ProductInfo
@@ -41,14 +41,14 @@ def _get_client_credentials() -> tuple[str, str]:
 
 
 def _make_signature(client_id: str, client_secret: str, timestamp: int) -> str:
-    """네이버 커머스 API HMAC-SHA256 서명 생성"""
-    message = f"{client_id}_{timestamp}"
-    signature = hmac.new(
-        client_secret.encode("utf-8"),
-        message.encode("utf-8"),
-        hashlib.sha256,
-    ).digest()
-    return base64.b64encode(signature).decode("utf-8")
+    """
+    네이버 커머스 API 전자서명 생성
+    방식: BCrypt.hashpw(password="{client_id}_{timestamp}", salt=client_secret)
+          → Base64 인코딩
+    """
+    password = f"{client_id}_{timestamp}"
+    hashed = bcrypt.hashpw(password.encode("utf-8"), client_secret.encode("utf-8"))
+    return base64.b64encode(hashed).decode("utf-8")
 
 
 async def _fetch_access_token() -> str:
