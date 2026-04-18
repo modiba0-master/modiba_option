@@ -57,14 +57,14 @@ def run_async(coro):
         return asyncio.run(coro)
 
 
-def suggest_weight(option_price: int, base_price: int) -> float:
-    """기존 옵션가(상대값)에서 가중치를 역산합니다."""
-    if base_price <= 0:
+def suggest_weight(naver_actual_price: int, base_price: int) -> float:
+    """
+    네이버 원본 실판매가(= 초기할인가 + 옵션가)를 기준가로 나눠 가중치를 역산합니다.
+    weight = naver_actual_price / base_price
+    """
+    if base_price <= 0 or naver_actual_price <= 0:
         return 1.0
-    actual = base_price + option_price
-    if actual <= 0:
-        return 1.0
-    return round(actual / base_price, 2)
+    return round(naver_actual_price / base_price, 2)
 
 
 def get_weight_key(option_id: str) -> str:
@@ -269,12 +269,12 @@ if st.session_state.selected_product:
         st.markdown(f"### {product.product_name}")
         st.caption(f"상품번호: {display_id} | 옵션 {len(product.options)}개")
 
-        # 네이버 원본 가격 (변경 불가, 참조용)
-        st.caption("**[네이버 원본]**")
+        # 네이버 원본 가격 (고정 기준 — 변경 불가)
+        st.caption("**[네이버 원본]** ← 기존 단가의 기준 (초기 할인가 + 옵션가)")
         m1, m2, m3 = st.columns(3)
         m1.metric("판매가", f"{product.sale_price:,}원")
         m2.metric("기본할인", f"▼ {product.discount_amount:,}원")
-        m3.metric("할인가", f"{product.discounted_price:,}원")
+        m3.metric("할인가 (기준)", f"{product.discounted_price:,}원")
 
     with col_base:
         st.subheader("④ 대표 기준가 설정")
@@ -335,19 +335,24 @@ if st.session_state.selected_product:
     # ──────────────────────────────────────────────
     st.subheader(f"⑤ 옵션별 가중치 설정 ({len(product.options)}개)")
 
+    # 네이버 초기 할인가 (고정 기준 — 사용자 기준가 변경과 무관)
+    naver_discounted = product.discounted_price if product.discounted_price > 0 else product.sale_price
+
     # ── 가중치 초기화 조건 1: 새 상품 로드 시
     if st.session_state.weights_initialized_for != display_id:
         for opt in product.options:
             key = get_weight_key(opt.option_id)
-            st.session_state[key] = suggest_weight(opt.option_price, base_price)
+            naver_actual = naver_discounted + opt.option_price   # 고정된 네이버 실판매가
+            st.session_state[key] = suggest_weight(naver_actual, base_price)
         st.session_state.weights_initialized_for = display_id
         st.session_state.prev_base_price = base_price
 
-    # ── 가중치 초기화 조건 2: 기준가가 변경된 경우 → 가중치 자동 재산출
+    # ── 가중치 초기화 조건 2: 기준가 변경 시 → 네이버 실판매가 유지되도록 재산출
     elif base_price != st.session_state.prev_base_price and base_price > 0:
         for opt in product.options:
             key = get_weight_key(opt.option_id)
-            st.session_state[key] = suggest_weight(opt.option_price, base_price)
+            naver_actual = naver_discounted + opt.option_price   # 고정된 네이버 실판매가
+            st.session_state[key] = suggest_weight(naver_actual, base_price)
         st.session_state.prev_base_price = base_price
 
     col_hdr, col_delivery, col_reset = st.columns([3, 1.5, 1])
@@ -366,8 +371,9 @@ if st.session_state.selected_product:
         st.write("")
         if st.button("🔄 가중치 초기화", use_container_width=True):
             for opt in product.options:
+                naver_actual = naver_discounted + opt.option_price
                 st.session_state[get_weight_key(opt.option_id)] = suggest_weight(
-                    opt.option_price, base_price
+                    naver_actual, base_price
                 )
             st.rerun()
 
@@ -438,8 +444,8 @@ if st.session_state.selected_product:
                 unsafe_allow_html=True,
             )
 
-        # 기존 단가 (현재 실판매가 기준)
-        existing_actual = base_price + opt.option_price
+        # 기존 단가 — 네이버 초기 할인가 + 옵션가 (고정값, 사용자 기준가 변경에 영향받지 않음)
+        existing_actual = naver_discounted + opt.option_price
         unit_label, orig_unit_price = parse_unit_price(opt.option_name, existing_actual)
         with c6:
             if orig_unit_price is not None:
@@ -495,7 +501,7 @@ if st.session_state.selected_product:
         key = get_weight_key(opt.option_id)
         w = float(st.session_state.get(key, 1.0))
         calc_price = round(base_price * w)
-        existing_actual = base_price + opt.option_price
+        existing_actual = naver_discounted + opt.option_price   # 고정된 네이버 실판매가
         vs_base = calc_price - base_price
         unit_label, unit_price = parse_unit_price(opt.option_name, calc_price)
 
