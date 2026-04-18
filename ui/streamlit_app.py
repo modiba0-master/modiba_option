@@ -206,23 +206,38 @@ def build_option_excel(
 
 def parse_unit_price(option_name: str, calc_price: int) -> tuple:
     """
-    옵션명에서 팩 단위와 수량을 추출하여 단가를 계산합니다.
+    옵션명에서 단위와 수량을 추출하여 단가를 계산합니다.
     반환: (라벨, 단가) 예: ("1kg당", 10600) 또는 ("—", None)
-    패턴 예: (1kgX3팩), (500gX6팩), (200gX5)
+
+    인식 우선순위:
+    1. 팩 패턴  : (1kgX3팩), (500gX6팩), (200gX5)  → 팩당 단가
+    2. 총 kg    : "3kg", "10kg" 등                  → 1kg당 단가
+    3. 총 g     : "500g", "200g" 등                 → 100g당 단가
     """
+    # 1) 팩 패턴: XkgXN 또는 XgXN
     m = re.search(r'(\d+(?:\.\d+)?)(kg|g)[Xx×](\d+)', option_name, re.IGNORECASE)
     if m:
         size = float(m.group(1))
         unit = m.group(2).lower()
         count = int(m.group(3))
-        if count <= 0:
-            return "—", None
-        unit_price = round(calc_price / count)
-        if unit == "kg":
-            label = f"{int(size)}kg당"
-        else:
-            label = f"{int(size)}g당"
-        return label, unit_price
+        if count > 0:
+            label = f"{int(size)}kg당" if unit == "kg" else f"{int(size)}g당"
+            return label, round(calc_price / count)
+
+    # 2) 총 kg 중량: Nkg 숫자 중 가장 큰 값 기준 → 1kg당 단가
+    kg_matches = re.findall(r'(\d+(?:\.\d+)?)\s*kg', option_name, re.IGNORECASE)
+    if kg_matches:
+        total_kg = max(float(x) for x in kg_matches)
+        if total_kg > 0:
+            return "1kg당", round(calc_price / total_kg)
+
+    # 3) 총 g 중량: Ng 숫자 중 가장 큰 값 기준 → 100g당 단가
+    g_matches = re.findall(r'(\d+(?:\.\d+)?)\s*g(?![a-zA-Z])', option_name, re.IGNORECASE)
+    if g_matches:
+        total_g = max(float(x) for x in g_matches)
+        if total_g >= 100:
+            return "100g당", round(calc_price * 100 / total_g)
+
     return "—", None
 
 
