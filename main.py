@@ -8,6 +8,7 @@ FastAPI 애플리케이션 진입점
 import logging
 import os
 
+import httpx
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -48,3 +49,22 @@ async def root():
 @app.get("/health", tags=["상태 확인"])
 async def health():
     return {"status": "healthy"}
+
+
+@app.get("/server-ip", tags=["상태 확인"], summary="서버 아웃바운드 IP 확인")
+async def server_ip():
+    """Railway 서버가 외부로 나가는 공인 IP를 반환합니다 (네이버 API IP 화이트리스트 등록용)."""
+    sources = [
+        "https://api.ipify.org",
+        "https://ifconfig.me/ip",
+        "https://icanhazip.com",
+    ]
+    async with httpx.AsyncClient(timeout=8.0) as client:
+        for url in sources:
+            try:
+                resp = await client.get(url)
+                ip = resp.text.strip()
+                return {"outbound_ip": ip, "source": url}
+            except Exception:
+                continue
+    return {"outbound_ip": "조회 실패", "source": None}

@@ -34,6 +34,42 @@ st.set_page_config(
 )
 
 # ──────────────────────────────────────────────
+# 사이드바: 서버 정보 및 서버 IP 확인
+# ──────────────────────────────────────────────
+def _get_server_ip() -> str:
+    import urllib.request
+    sources = ["https://api.ipify.org", "https://ifconfig.me/ip", "https://icanhazip.com"]
+    for url in sources:
+        try:
+            return urllib.request.urlopen(url, timeout=5).read().decode().strip()
+        except Exception:
+            continue
+    return "조회 실패"
+
+with st.sidebar:
+    st.markdown("### ⚙️ 서버 정보")
+    if st.button("🌐 Railway 서버 IP 확인", use_container_width=True):
+        with st.spinner("서버 IP 조회 중..."):
+            ip = _get_server_ip()
+        st.session_state["server_ip"] = ip
+
+    if "server_ip" in st.session_state:
+        ip = st.session_state["server_ip"]
+        st.code(ip, language=None)
+        st.caption("👆 이 IP를 네이버 커머스 API 화이트리스트에 등록하세요")
+        st.markdown(
+            "[📋 네이버 커머스 개발자센터](https://sell.smartstore.naver.com/#/seller/api)"
+        )
+    st.divider()
+    st.markdown("### 📌 API 상태")
+    api_status = os.getenv("NAVER_COMMERCE_API_CLIENT_ID", "")
+    if api_status:
+        st.success("API 자격증명 설정됨")
+    else:
+        st.error("API 자격증명 미설정")
+    st.caption(f"기본 상품ID: `{os.getenv('DEFAULT_PRODUCT_ID', '6774969928')}`")
+
+# ──────────────────────────────────────────────
 # CSS 스타일
 # ──────────────────────────────────────────────
 st.markdown("""
